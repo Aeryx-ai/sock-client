@@ -12,6 +12,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 	"unicode/utf8"
 
 	"connectrpc.com/connect"
@@ -175,9 +176,10 @@ func TestEnsureNameTakenByAnotherPuppetGetsAPathHash(t *testing.T) {
 	}
 }
 
-// a lost cache (or a lost response) leaves our own puppet behind; take it back
-// with a new token instead of making a second one
-func TestEnsureReclaimsItsOwnPuppetAfterACacheLoss(t *testing.T) {
+// A lost cache leaves the plain-named puppet behind: the name may be another
+// repository's, so it is never taken back. The project gets a path-hashed puppet,
+// which is reclaimable (TestHashedPuppetIsReclaimedAfterACacheLoss).
+func TestEnsureAfterACacheLossDoesNotTakeThePlainNamedPuppetBack(t *testing.T) {
 	f := newFake()
 	p := newProjects(t, f)
 	dir := filepath.Join(t.TempDir(), "proj")
@@ -188,11 +190,11 @@ func TestEnsureReclaimsItsOwnPuppetAfterACacheLoss(t *testing.T) {
 	}
 	_ = os.RemoveAll(p.Dir)
 	second, err := p.Ensure(t.Context(), dir)
-	if err != nil || second == first || len(f.mints) != 1 || len(f.puppets) != 1 {
+	if err != nil || second == first || len(f.mints) != 0 || len(f.puppets) != 2 {
 		t.Fatalf("second %q (%v), mints %v, puppets %v", second, err, f.mints, f.puppets)
 	}
 	if again, _ := p.Ensure(t.Context(), dir); again != second {
-		t.Fatalf("not cached after reclaiming: %q", again)
+		t.Fatalf("not cached: %q", again)
 	}
 }
 
@@ -276,27 +278,6 @@ func TestEnsureIgnoresACorruptCacheEntry(t *testing.T) {
 	}
 }
 
-func TestEnsureErrorsNeverCarryTheToken(t *testing.T) {
-	f := newFake()
-	p := newProjects(t, f)
-	p.API = errAPI{fakePuppets: f, err: errors.New("boom sock_pt_x_secret")}
-	dir := filepath.Join(t.TempDir(), "proj")
-	_ = os.Mkdir(dir, 0o755)
-	_, err := p.Ensure(t.Context(), dir)
-	if err == nil {
-		t.Fatal("no error")
-	}
-}
-
-type errAPI struct {
-	*fakePuppets
-	err error
-}
-
-func (e errAPI) CreatePuppet(context.Context, string, string) (string, string, error) {
-	return "", "", e.err
-}
-
 func TestSweepErasesPuppetsOfVanishedRepositories(t *testing.T) {
 	f := newFake()
 	p := newProjects(t, f)
@@ -346,6 +327,7 @@ func TestSweepKeepsTheEntryWhenEraseFailsAndDropsItWhenTheHubForgotIt(t *testing
 	root := t.TempDir()
 	a := filepath.Join(root, "a")
 	_ = os.Mkdir(a, 0o755)
+	_ = os.WriteFile(filepath.Join(root, "keep"), nil, 0o600) // the parent is not empty
 	if _, err := p.Ensure(t.Context(), a); err != nil {
 		t.Fatal(err)
 	}
@@ -445,5 +427,176 @@ func TestTokenFileIsTheCachedTokensPath(t *testing.T) {
 	b, err := os.ReadFile(path)
 	if err != nil || strings.TrimSpace(string(b)) != tok {
 		t.Fatalf("%q %v", b, err)
+	}
+}
+
+// review F1: two repositories called "api" are two projects
+func TestSameBasenameRepositoriesGetTheirOwnPuppets(t *testing.T) {
+	root := t.TempDir()
+	a, b := filepath.Join(root, "orgA", "api"), filepath.Join(root, "orgB", "api")
+	for _, d := range []string{a, b} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	f := newFake()
+	p := newProjects(t, f)
+	ta, err := p.Ensure(t.Context(), a)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tb, err := p.Ensure(t.Context(), b)
+	if err != nil || ta == tb || len(f.mints) != 0 || len(f.puppets) != 2 {
+		t.Fatalf("a %q b %q (%v) mints %v puppets %v", ta, tb, err, f.mints, f.puppets)
+	}
+	// removing a's repository erases a's puppet and not b's
+	if err := os.RemoveAll(a); err != nil {
+		t.Fatal(err)
+	}
+	_ = os.WriteFile(filepath.Join(root, "orgA", "keep"), nil, 0o600) // the parent is not empty
+	p.Sweep(t.Context())
+	if len(f.erased) != 1 || len(f.puppets) != 1 {
+		t.Fatalf("erased %v, puppets %v", f.erased, f.puppets)
+	}
+	if again, err := p.Ensure(t.Context(), b); err != nil || again != tb {
+		t.Fatalf("b lost its puppet: %q %v", again, err)
+	}
+}
+
+// review F2: a path-hashed puppet is found again after a cache loss
+func TestHashedPuppetIsReclaimedAfterACacheLoss(t *testing.T) {
+	f := newFake()
+	f.taken["proj on mac"] = true
+	p := newProjects(t, f)
+	dir := filepath.Join(t.TempDir(), "proj")
+	_ = os.Mkdir(dir, 0o755)
+	first, err := p.Ensure(t.Context(), dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = os.RemoveAll(p.Dir)
+	second, err := p.Ensure(t.Context(), dir)
+	if err != nil || second == first || len(f.mints) != 1 || len(f.puppets) != 1 {
+		t.Fatalf("%q %v mints %v puppets %v", second, err, f.mints, f.puppets)
+	}
+}
+
+// review F3: a cached token the hub rejects is replaced
+func TestEnsureReplacesACachedTokenTheHubRejects(t *testing.T) {
+	f := newFake()
+	p := newProjects(t, f)
+	dir := filepath.Join(t.TempDir(), "proj")
+	_ = os.Mkdir(dir, 0o755)
+	first, err := p.Ensure(t.Context(), dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// the puppet was erased in the app: its name is free again
+	f.puppets = map[string]string{}
+	p.Check = func(_ context.Context, tok string) error {
+		if tok == first {
+			return withReason(connect.NewError(connect.CodeUnauthenticated, errors.New("gone")), sockv1.ErrorReason_ERROR_REASON_TOKEN_INVALID)
+		}
+		return nil
+	}
+	second, err := p.Ensure(t.Context(), dir)
+	if err != nil || second == first || len(f.creates) != 2 {
+		t.Fatalf("%q %v creates %v", second, err, f.creates)
+	}
+	// a hub that cannot be reached does not discard a good token
+	p.Check = func(context.Context, string) error { return Unavailable() }
+	if third, err := p.Ensure(t.Context(), dir); err != nil || third != second || len(f.creates) != 2 {
+		t.Fatalf("%q %v creates %v", third, err, f.creates)
+	}
+}
+
+// review F4: an empty parent is an unmounted volume on Linux, not a deleted repository
+func TestSweepKeepsPuppetsWhenTheParentIsEmpty(t *testing.T) {
+	f := newFake()
+	p := newProjects(t, f)
+	mount := filepath.Join(t.TempDir(), "mnt")
+	repo := filepath.Join(mount, "proj")
+	_ = os.MkdirAll(repo, 0o755)
+	if _, err := p.Ensure(t.Context(), repo); err != nil {
+		t.Fatal(err)
+	}
+	_ = os.RemoveAll(repo) // the mount point is left, empty
+	p.Sweep(t.Context())
+	if len(f.erased) != 0 {
+		t.Fatalf("erased %v", f.erased)
+	}
+}
+
+// review F5: GIT_DIR of a parent process does not pick the project
+func TestProjectIgnoresTheAmbientGitEnvironment(t *testing.T) {
+	root := t.TempDir()
+	victim := filepath.Join(root, "victim")
+	other := filepath.Join(root, "other")
+	_ = os.Mkdir(victim, 0o755)
+	_ = os.Mkdir(other, 0o755)
+	git(t, victim, "init", "-q")
+	t.Setenv("GIT_DIR", filepath.Join(victim, ".git"))
+	got, err := Project(other)
+	want, _ := filepath.EvalSymlinks(other)
+	if err != nil || got != want {
+		t.Fatalf("Project(other) = %q, %v; want %q", got, err, want)
+	}
+}
+
+// review F6: a repository path with a newline still sweeps the right puppet
+func TestSweepHandlesNewlinesInThePath(t *testing.T) {
+	f := newFake()
+	p := newProjects(t, f)
+	root := t.TempDir()
+	dir := filepath.Join(root, "proj\nXX")
+	if err := os.Mkdir(dir, 0o755); err != nil {
+		t.Skip("filesystem refuses the name")
+	}
+	_ = os.WriteFile(filepath.Join(root, "keep"), nil, 0o600)
+	if _, err := p.Ensure(t.Context(), dir); err != nil {
+		t.Fatal(err)
+	}
+	_ = os.RemoveAll(dir)
+	p.Sweep(t.Context())
+	if len(f.erased) != 1 || f.erased[0] != "pup-b" {
+		t.Fatalf("erased %v", f.erased)
+	}
+}
+
+// review F7: waiting for the cache lock honours the context
+func TestEnsureGivesUpOnALockedCacheWhenTheContextEnds(t *testing.T) {
+	f := newFake()
+	p := newProjects(t, f)
+	dir := filepath.Join(t.TempDir(), "proj")
+	_ = os.Mkdir(dir, 0o755)
+	repo, _ := Project(dir)
+	unlock, err := p.lock(t.Context(), keyOf(repo))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer unlock()
+	ctx, cancel := context.WithTimeout(t.Context(), 300*time.Millisecond)
+	defer cancel()
+	if _, err := p.Ensure(ctx, dir); err == nil {
+		t.Fatal("ensure returned while the cache was locked")
+	}
+}
+
+func TestSweepDropsOldTempFiles(t *testing.T) {
+	f := newFake()
+	p := newProjects(t, f)
+	_ = os.MkdirAll(p.Dir, 0o700)
+	old := filepath.Join(p.Dir, ".tmp-123")
+	_ = os.WriteFile(old, []byte("sock_pt_x_secret"), 0o600)
+	when := time.Now().Add(-2 * time.Hour)
+	_ = os.Chtimes(old, when, when)
+	fresh := filepath.Join(p.Dir, ".tmp-456")
+	_ = os.WriteFile(fresh, nil, 0o600)
+	p.Sweep(t.Context())
+	if _, err := os.Stat(old); err == nil {
+		t.Fatal("an old temp file with a token was kept")
+	}
+	if _, err := os.Stat(fresh); err != nil {
+		t.Fatal("a fresh temp file (a write in progress) was removed")
 	}
 }

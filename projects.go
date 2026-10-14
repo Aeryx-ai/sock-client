@@ -9,8 +9,10 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
+	"time"
 	"unicode"
 	"unicode/utf8"
 
@@ -135,6 +137,21 @@ type Projects struct {
 	Host string
 	// Log receives one line per notable event; never a token. Nil: silent.
 	Log func(format string, args ...any)
+	// Check, when set, is asked about a cached token before it is used. An
+	// error with reason TOKEN_INVALID (the puppet was erased) discards the
+	// cache entry and makes a new puppet; any other error (the hub cannot be
+	// reached) keeps the token.
+	Check func(ctx context.Context, token string) error
+}
+
+// NewTokenCheck is a Check that asks the hub who the token is (GetMe).
+func NewTokenCheck(cfg Config, userAgent string) func(context.Context, string) error {
+	return func(ctx context.Context, token string) error {
+		c := cfg
+		c.Token = token
+		_, err := New(c, userAgent).Identity.GetMe(ctx, connect.NewRequest(&sockv1.GetMeRequest{}))
+		return err
+	}
 }
 
 // DefaultProjectsDir is ${XDG_STATE_HOME:-~/.local/state}/sock-integrations/puppets.
@@ -173,7 +190,11 @@ func Project(dir string) (string, error) {
 	if resolved, err := filepath.EvalSymlinks(abs); err == nil {
 		abs = resolved
 	}
-	out, err := exec.Command("git", "-C", abs, "rev-parse", "--path-format=absolute", "--git-common-dir").Output()
+	cmd := exec.Command("git", "-C", abs, "rev-parse", "--path-format=absolute", "--git-common-dir")
+	// the project is the one dir is in, not whatever GIT_DIR a parent process
+	// (a hook, a rebase) pointed git at
+	cmd.Env = scrubGitEnv(os.Environ())
+	out, err := cmd.Output()
 	if err != nil {
 		return abs, nil
 	}
@@ -191,6 +212,16 @@ func Project(dir string) (string, error) {
 	return root, nil
 }
 
+func scrubGitEnv(env []string) []string {
+	out := make([]string, 0, len(env))
+	for _, kv := range env {
+		if !strings.HasPrefix(kv, "GIT_") {
+			out = append(out, kv)
+		}
+	}
+	return out
+}
+
 func keyOf(repo string) string {
 	sum := sha256.Sum256([]byte(repo))
 	return hex.EncodeToString(sum[:])[:32]
@@ -198,17 +229,22 @@ func keyOf(repo string) string {
 
 func shortHash(repo string) string {
 	sum := sha256.Sum256([]byte(repo))
-	return hex.EncodeToString(sum[:])[:6]
+	return hex.EncodeToString(sum[:])[:8]
 }
 
 // cleanName keeps what renders: no control, format or private-use runes.
 func cleanName(s string) string {
 	var b strings.Builder
 	for _, r := range s {
-		if unicode.IsControl(r) || unicode.Is(unicode.Cf, r) || unicode.Is(unicode.Co, r) || r == utf8.RuneError {
+		switch {
+		case unicode.IsControl(r), unicode.Is(unicode.Cf, r), unicode.Is(unicode.Co, r), r == utf8.RuneError,
+			r >= 0xFE00 && r <= 0xFE0F, r == 0x3164, r == 0x2800, r == 0x2028, r == 0x2029:
 			continue
+		case unicode.IsSpace(r):
+			b.WriteRune(' ')
+		default:
+			b.WriteRune(r)
 		}
-		b.WriteRune(r)
 	}
 	return strings.TrimSpace(b.String())
 }
@@ -246,21 +282,31 @@ func (p *Projects) Ensure(ctx context.Context, dir string) (string, error) {
 	if err := p.prepare(); err != nil {
 		return "", err
 	}
-	unlock, err := p.lock(key)
+	unlock, err := p.lock(ctx, key)
 	if err != nil {
 		return "", err
 	}
 	defer unlock()
 	if tok := p.cached(key); tok != "" {
-		return tok, nil
+		if p.Check == nil {
+			return tok, nil
+		}
+		err := p.Check(ctx, tok)
+		if Reason(err) != sockv1.ErrorReason_ERROR_REASON_TOKEN_INVALID {
+			return tok, nil
+		}
+		p.logf("the puppet of %s is gone; making another", cleanName(filepath.Base(repo)))
+		p.forget(key)
 	}
-	name := puppetName(filepath.Base(repo), p.Host)
+	project := cleanName(filepath.Base(repo))
+	name := puppetName(project, p.Host)
 	id, tok, err := p.API.CreatePuppet(ctx, name, tokenLabel)
 	if Reason(err) == sockv1.ErrorReason_ERROR_REASON_PUPPET_NAME_TAKEN {
-		id, tok, err = p.nameTaken(ctx, repo, name)
+		name = puppetName(project+"-"+shortHash(repo), p.Host)
+		id, tok, err = p.hashed(ctx, name)
 	}
 	if err != nil {
-		return "", fmt.Errorf("make the puppet for %s: %w", filepath.Base(repo), Describe(err))
+		return "", fmt.Errorf("make the puppet for %s: %w", project, Describe(err))
 	}
 	if TokenKind(tok) != KindPuppet {
 		return "", errors.New("the hub returned something that is not a puppet token")
@@ -268,24 +314,31 @@ func (p *Projects) Ensure(ctx context.Context, dir string) (string, error) {
 	if err := p.store(key, repo, id, tok); err != nil {
 		return "", err
 	}
-	p.logf("puppet %q ready for %s", name, filepath.Base(repo))
+	p.logf("puppet %q ready", name)
 	return tok, nil
 }
 
-// nameTaken: the name is either our own puppet (the cache or the response was
-// lost; the hub lists only puppets this key made, so take it back with a new
-// token) or someone else's (a hash of the path makes it ours).
-func (p *Projects) nameTaken(ctx context.Context, repo, name string) (string, string, error) {
-	list, err := p.API.ListPuppets(ctx)
-	if err == nil {
-		for _, pu := range list {
-			if pu.Name == name {
-				tok, err := p.API.MintPuppetToken(ctx, pu.ID, tokenLabel)
-				return pu.ID, tok, err
-			}
+// hashed makes the puppet under a name that carries a hash of the repository
+// path, so it is this repository's alone. When that name is taken it is our own
+// puppet from before a cache loss (the hub lists only the puppets this key
+// made, and no other repository has this hash): take it back with a new token.
+// The plain name is never reclaimed: two repositories can share it.
+func (p *Projects) hashed(ctx context.Context, name string) (string, string, error) {
+	id, tok, err := p.API.CreatePuppet(ctx, name, tokenLabel)
+	if Reason(err) != sockv1.ErrorReason_ERROR_REASON_PUPPET_NAME_TAKEN {
+		return id, tok, err
+	}
+	list, lerr := p.API.ListPuppets(ctx)
+	if lerr != nil {
+		return "", "", err
+	}
+	for _, pu := range list {
+		if pu.Name == name {
+			tok, err := p.API.MintPuppetToken(ctx, pu.ID, tokenLabel)
+			return pu.ID, tok, err
 		}
 	}
-	return p.API.CreatePuppet(ctx, puppetName(filepath.Base(repo)+"-"+shortHash(repo), p.Host), tokenLabel)
+	return "", "", err
 }
 
 // Sweep erases the puppets of repositories that no longer exist and forgets
@@ -298,22 +351,28 @@ func (p *Projects) Sweep(ctx context.Context) {
 		return
 	}
 	for _, e := range ents {
+		if strings.HasPrefix(e.Name(), ".tmp-") {
+			// a write in progress is fresh; an old one is a crash's leftover, token inside
+			if info, err := e.Info(); err == nil && time.Since(info.ModTime()) > time.Hour {
+				_ = os.Remove(filepath.Join(p.Dir, e.Name()))
+			}
+			continue
+		}
 		key, ok := strings.CutSuffix(e.Name(), ".meta")
-		if !ok {
+		if !ok || ctx.Err() != nil {
 			continue
 		}
-		repo, id := p.meta(key)
-		if repo == "" || id == "" {
+		if repo, id := p.meta(key); repo == "" || id == "" || !repoGone(repo) {
 			continue
 		}
-		if _, err := os.Stat(repo); !errors.Is(err, os.ErrNotExist) {
-			continue
-		}
-		if _, err := os.Stat(filepath.Dir(repo)); err != nil {
-			continue
-		}
-		unlock, err := p.lock(key)
+		unlock, err := p.lock(ctx, key)
 		if err != nil {
+			continue
+		}
+		// the entry may have changed while the lock was awaited
+		repo, id := p.meta(key)
+		if repo == "" || id == "" || !repoGone(repo) {
+			unlock()
 			continue
 		}
 		err = p.API.ErasePuppet(ctx, id)
@@ -328,6 +387,18 @@ func (p *Projects) Sweep(ctx context.Context) {
 	}
 }
 
+// repoGone says a repository was removed: it does not exist while its parent
+// directory exists and holds something. A missing parent is an unmounted volume
+// (macOS), an empty one the mount point of an unmounted volume (Linux). Any
+// other error, permission included, is not "gone".
+func repoGone(repo string) bool {
+	if _, err := os.Stat(repo); !errors.Is(err, os.ErrNotExist) {
+		return false
+	}
+	ents, err := os.ReadDir(filepath.Dir(repo))
+	return err == nil && len(ents) > 0
+}
+
 func (p *Projects) prepare() error {
 	if err := os.MkdirAll(p.Dir, 0o700); err != nil {
 		return fmt.Errorf("puppet cache: %w", err)
@@ -335,7 +406,7 @@ func (p *Projects) prepare() error {
 	return os.Chmod(p.Dir, 0o700)
 }
 
-func (p *Projects) lock(key string) (func(), error) {
+func (p *Projects) lock(ctx context.Context, key string) (func(), error) {
 	if err := p.prepare(); err != nil {
 		return nil, err
 	}
@@ -343,9 +414,21 @@ func (p *Projects) lock(key string) (func(), error) {
 	if err != nil {
 		return nil, fmt.Errorf("puppet cache lock: %w", err)
 	}
-	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX); err != nil {
-		_ = f.Close()
-		return nil, fmt.Errorf("puppet cache lock: %w", err)
+	for {
+		err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
+		if err == nil {
+			break
+		}
+		if !errors.Is(err, syscall.EWOULDBLOCK) {
+			_ = f.Close()
+			return nil, fmt.Errorf("puppet cache lock: %w", err)
+		}
+		select {
+		case <-ctx.Done():
+			_ = f.Close()
+			return nil, fmt.Errorf("puppet cache is busy: %w", ctx.Err())
+		case <-time.After(25 * time.Millisecond):
+		}
 	}
 	return func() { _ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN); _ = f.Close() }, nil
 }
@@ -367,12 +450,16 @@ func (p *Projects) meta(key string) (repo, id string) {
 	if err != nil {
 		return "", ""
 	}
-	repo, id, _ = strings.Cut(strings.TrimRight(string(b), "\n"), "\n")
+	quoted, id, _ := strings.Cut(strings.TrimRight(string(b), "\n"), "\n")
+	repo, err = strconv.Unquote(quoted)
+	if err != nil {
+		return "", ""
+	}
 	return repo, id
 }
 
 func (p *Projects) store(key, repo, id, tok string) error {
-	if err := writeAtomic(filepath.Join(p.Dir, key+".meta"), []byte(repo+"\n"+id+"\n")); err != nil {
+	if err := writeAtomic(filepath.Join(p.Dir, key+".meta"), []byte(strconv.Quote(repo)+"\n"+id+"\n")); err != nil {
 		return err
 	}
 	return writeAtomic(filepath.Join(p.Dir, key), []byte(tok+"\n"))
