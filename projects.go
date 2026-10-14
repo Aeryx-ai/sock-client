@@ -143,12 +143,16 @@ type Projects struct {
 	Check func(ctx context.Context, token string) error
 }
 
-// NewTokenCheck is a Check that asks the hub who the token is (GetMe).
+// NewTokenCheck is a Check that asks the hub who the token is (GetMe), once,
+// within UnaryTimeout: a hub that never answers keeps the token rather than
+// holding the cache lock.
 func NewTokenCheck(cfg Config, userAgent string) func(context.Context, string) error {
 	return func(ctx context.Context, token string) error {
 		c := cfg
 		c.Token = token
-		_, err := New(c, userAgent).Identity.GetMe(ctx, connect.NewRequest(&sockv1.GetMeRequest{}))
+		_, err := Call(ctx, Retrier{}, func(ctx context.Context) (*connect.Response[sockv1.GetMeResponse], error) {
+			return New(c, userAgent).Identity.GetMe(ctx, connect.NewRequest(&sockv1.GetMeRequest{}))
+		})
 		return err
 	}
 }

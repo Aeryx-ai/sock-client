@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -658,4 +659,39 @@ func TestProjectsDirIsScopedByServerAndMachineKey(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(pa.Dir, keyOf(repo))); err != nil {
 		t.Fatalf("a's entry was swept by b: %v", err)
 	}
+}
+
+// security review 2: the token check never waits on the hub without a deadline
+func TestTokenCheckHasADeadline(t *testing.T) {
+	var timeout atomic.Value
+	mux := http.NewServeMux()
+	mux.Handle(sockv1connect.NewIdentityServiceHandler(&getMeFake{timeout: &timeout}))
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	check := NewTokenCheck(Config{URL: srv.URL}, "test")
+	if err := check(context.Background(), "sock_pt_x_secret"); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := timeout.Load().(string)
+	ms, err := strconv.Atoi(got)
+	if err != nil || ms <= 0 || ms > int(UnaryTimeout/time.Millisecond) {
+		t.Fatalf("Connect-Timeout-Ms %q", got)
+	}
+	// a rejected token still reads as TOKEN_INVALID
+	if err := check(context.Background(), "sock_pt_gone_secret"); Reason(err) != sockv1.ErrorReason_ERROR_REASON_TOKEN_INVALID {
+		t.Fatalf("reason of %v", err)
+	}
+}
+
+type getMeFake struct {
+	sockv1connect.UnimplementedIdentityServiceHandler
+	timeout *atomic.Value
+}
+
+func (f *getMeFake) GetMe(_ context.Context, r *connect.Request[sockv1.GetMeRequest]) (*connect.Response[sockv1.GetMeResponse], error) {
+	f.timeout.Store(r.Header().Get("Connect-Timeout-Ms"))
+	if r.Header().Get("Authorization") == "Bearer sock_pt_gone_secret" {
+		return nil, withReason(connect.NewError(connect.CodeUnauthenticated, errors.New("gone")), sockv1.ErrorReason_ERROR_REASON_TOKEN_INVALID)
+	}
+	return connect.NewResponse(&sockv1.GetMeResponse{}), nil
 }
