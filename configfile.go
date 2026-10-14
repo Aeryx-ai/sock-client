@@ -17,7 +17,10 @@ type FileConfig struct {
 	// PuppetToken is the puppet token sock-mcp reads (sock puppets use writes
 	// it). Token stays the human session token sock login writes.
 	PuppetToken string `toml:"puppet_token"`
-	AccessGate  string `toml:"access_gate"`
+	// MachineKey is the machine key sock-mcp makes project puppets with
+	// (sock machine-key use writes it).
+	MachineKey string `toml:"machine_key"`
+	AccessGate string `toml:"access_gate"`
 }
 
 // DefaultConfigPath is $XDG_CONFIG_HOME/sock/config.toml, else
@@ -34,9 +37,9 @@ func DefaultConfigPath(getenv func(string) string) (string, error) {
 }
 
 // LoadFileConfig reads the config file at path. An empty path or a missing
-// file is an empty FileConfig, not an error. A file that holds a token or an
-// access gate and is readable by group or others is refused, naming the file
-// and never its contents.
+// file is an empty FileConfig, not an error. A file that holds a token, a
+// machine key or an access gate and is readable by group or others is
+// refused, naming the file and never its contents.
 //
 // This reads the file only. How its keys combine with flags and the
 // environment belongs to each caller: sock-cli takes flag, then env, then
@@ -57,7 +60,7 @@ func LoadFileConfig(path string) (FileConfig, error) {
 	if _, err := toml.DecodeFile(path, &f); err != nil {
 		return f, fmt.Errorf("config: parse %s: %w", path, err)
 	}
-	if (f.Token != "" || f.PuppetToken != "" || f.AccessGate != "") && info.Mode().Perm()&0o077 != 0 {
+	if (f.Token != "" || f.PuppetToken != "" || f.MachineKey != "" || f.AccessGate != "") && info.Mode().Perm()&0o077 != 0 {
 		return FileConfig{}, fmt.Errorf("config: %s holds a secret but is readable by others (mode %o); run chmod 600 %s", path, info.Mode().Perm(), path)
 	}
 	return f, nil

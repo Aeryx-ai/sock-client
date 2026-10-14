@@ -106,3 +106,14 @@ func TestLoadFileConfigPuppetTokenIsASecretToo(t *testing.T) {
 		t.Fatalf("got %+v, %v", f, err)
 	}
 }
+
+func TestLoadFileConfigMachineKeyIsASecretToo(t *testing.T) {
+	p := writeConfig(t, 0o644, "machine_key = \"sock_mk_a\"\n")
+	if _, err := LoadFileConfig(p); err == nil || !strings.Contains(err.Error(), "chmod 600") || strings.Contains(err.Error(), "sock_mk_a") {
+		t.Fatalf("err = %v", err)
+	}
+	p = writeConfig(t, 0o600, "machine_key = \"sock_mk_a\"\n")
+	if f, err := LoadFileConfig(p); err != nil || f.MachineKey != "sock_mk_a" {
+		t.Fatalf("got %+v, %v", f, err)
+	}
+}
