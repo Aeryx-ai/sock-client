@@ -19,6 +19,9 @@ const DefaultURL = "https://api.sock.aeryx.ai"
 type Config struct {
 	URL   string
 	Token string
+	// AccessGate, when set, is sent as the Sock-Access-Gate header to the
+	// configured server only (staging sits behind it).
+	AccessGate string
 }
 
 // Validate checks c. Error text never echoes the raw URL or the token: both
