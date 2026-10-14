@@ -428,3 +428,22 @@ func TestPuppetAPISendsTheMachineKey(t *testing.T) {
 		}
 	}
 }
+
+func TestTokenFileIsTheCachedTokensPath(t *testing.T) {
+	f := newFake()
+	p := newProjects(t, f)
+	dir := filepath.Join(t.TempDir(), "proj")
+	_ = os.Mkdir(dir, 0o755)
+	tok, err := p.Ensure(t.Context(), dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path, err := p.TokenFile(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := os.ReadFile(path)
+	if err != nil || strings.TrimSpace(string(b)) != tok {
+		t.Fatalf("%q %v", b, err)
+	}
+}

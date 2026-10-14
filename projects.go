@@ -408,3 +408,13 @@ func writeAtomic(path string, data []byte) error {
 	}
 	return nil
 }
+
+// TokenFile is where dir's project puppet token is cached, whether or not it
+// has been minted yet. The path is not a secret; the file's mode is.
+func (p *Projects) TokenFile(dir string) (string, error) {
+	repo, err := Project(dir)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(p.Dir, keyOf(repo)), nil
+}
