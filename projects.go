@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -315,6 +316,9 @@ func (p *Projects) Ensure(ctx context.Context, dir string) (string, error) {
 		p.logf("the puppet of %s is gone; making another", cleanName(filepath.Base(repo)))
 		p.forget(key)
 	}
+	if tok := p.adopt(ctx, key, repo); tok != "" {
+		return tok, nil
+	}
 	project := cleanName(filepath.Base(repo))
 	name := puppetName(project, p.Host)
 	id, tok, err := p.API.CreatePuppet(ctx, name, tokenLabel)
@@ -333,6 +337,33 @@ func (p *Projects) Ensure(ctx context.Context, dir string) (string, error) {
 	}
 	p.logf("puppet %q ready", name)
 	return tok, nil
+}
+
+// adopt copies repo's entry from the unscoped layout of before (ProjectsDir's
+// parent) into this cache and returns its token, when its puppet is one this
+// key lists: the listing is what ties the old entry to this hub and this key,
+// so no other server's token is ever offered. Copied, not moved: a reader not
+// yet upgraded keeps using it. Anything else, an unlisted puppet included,
+// returns "" and Ensure mints as before.
+func (p *Projects) adopt(ctx context.Context, key, repo string) string {
+	old := &Projects{Dir: filepath.Dir(p.Dir)}
+	oldRepo, id, _ := old.meta(key)
+	tok := old.cached(key)
+	if oldRepo != repo || id == "" || tok == "" {
+		return ""
+	}
+	list, err := p.API.ListPuppets(ctx)
+	if err != nil || !slices.ContainsFunc(list, func(pu PuppetInfo) bool { return pu.ID == id }) {
+		return ""
+	}
+	if p.Check != nil && Reason(p.Check(ctx, tok)) == sockv1.ErrorReason_ERROR_REASON_TOKEN_INVALID {
+		return ""
+	}
+	if err := p.store(key, repo, id, tok); err != nil {
+		return ""
+	}
+	p.logf("adopted the puppet of %s from the old cache", cleanName(filepath.Base(repo)))
+	return tok
 }
 
 // hashed makes the puppet under a name that carries a hash of the repository

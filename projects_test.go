@@ -737,3 +737,56 @@ func TestSweepKeepsARepositoryAtAVolumeRoot(t *testing.T) {
 		t.Fatalf("erased %v", f.erased)
 	}
 }
+
+// sock-cli-dk6: an entry of the unscoped layout is adopted, copied, when its
+// puppet is one this key lists on this hub, so the upgrade mints no second
+// puppet and a not-yet-upgraded reader of the old entry keeps working. Any
+// other old entry is never read.
+func TestEnsureAdoptsThisKeysPuppetFromTheOldLayout(t *testing.T) {
+	state := t.TempDir()
+	getenv := func(k string) string { return map[string]string{"XDG_STATE_HOME": state}[k] }
+	cfg := Config{URL: "https://a.example", Token: "sock_mk_a_secret"}
+	dir := filepath.Join(t.TempDir(), "proj")
+	_ = os.Mkdir(dir, 0o755)
+	repo, _ := Project(dir)
+	base := projectsBase(getenv)
+	writeLegacy := func(id, tok string) {
+		t.Helper()
+		_ = os.MkdirAll(base, 0o700)
+		if err := os.WriteFile(filepath.Join(base, keyOf(repo)), []byte(tok+"\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(base, keyOf(repo)+".meta"), []byte(strconv.Quote(repo)+"\n"+id+"\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	t.Run("this key's puppet", func(t *testing.T) {
+		f := newFake()
+		f.puppets["pup-old"] = "proj on mac"
+		writeLegacy("pup-old", "sock_pt_pupold_secret")
+		p := &Projects{API: f, Dir: ProjectsDir(getenv, cfg), Host: "mac"}
+		tok, err := p.Ensure(t.Context(), dir)
+		if err != nil || tok != "sock_pt_pupold_secret" || len(f.creates) != 0 {
+			t.Fatalf("got %q (%v), creates %v", tok, err, f.creates)
+		}
+		if _, id, _ := p.meta(keyOf(repo)); id != "pup-old" || p.cached(keyOf(repo)) != tok {
+			t.Fatalf("not copied into the scoped cache: id %q", id)
+		}
+		if b, err := os.ReadFile(filepath.Join(base, keyOf(repo))); err != nil || strings.TrimSpace(string(b)) != tok {
+			t.Fatalf("the old entry was moved, not copied: %q %v", b, err)
+		}
+	})
+
+	t.Run("a puppet this key does not list", func(t *testing.T) {
+		f := newFake()
+		writeLegacy("pup-elsewhere", "sock_pt_elsewhere_secret")
+		var checked []string
+		p := &Projects{API: f, Dir: ProjectsDir(getenv, Config{URL: "https://b.example", Token: cfg.Token}), Host: "mac",
+			Check: func(_ context.Context, tok string) error { checked = append(checked, tok); return nil }}
+		tok, err := p.Ensure(t.Context(), dir)
+		if err != nil || tok == "sock_pt_elsewhere_secret" || len(f.creates) != 1 || len(checked) != 0 {
+			t.Fatalf("got %q (%v), creates %v, checked %v", tok, err, f.creates, checked)
+		}
+	})
+}
