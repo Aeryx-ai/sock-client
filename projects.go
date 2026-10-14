@@ -199,8 +199,9 @@ func (p *Projects) logf(format string, args ...any) {
 
 // Project is where a directory's puppet belongs: the repository's root (every
 // worktree and subdirectory of one repository agree), or the directory itself
-// outside git.
-func Project(dir string) (string, error) {
+// outside git. git runs under ctx: one that never finishes is an error, not the
+// bare directory, which would name the wrong project.
+func Project(ctx context.Context, dir string) (string, error) {
 	abs, err := filepath.Abs(dir)
 	if err != nil {
 		return "", err
@@ -208,11 +209,16 @@ func Project(dir string) (string, error) {
 	if resolved, err := filepath.EvalSymlinks(abs); err == nil {
 		abs = resolved
 	}
-	cmd := exec.Command("git", "-C", abs, "rev-parse", "--path-format=absolute", "--git-common-dir")
+	cmd := exec.CommandContext(ctx, "git", "-C", abs, "rev-parse", "--path-format=absolute", "--git-common-dir")
+	// a child git left behind holding stdout does not keep Output waiting
+	cmd.WaitDelay = 100 * time.Millisecond
 	// the project is the one dir is in, not whatever GIT_DIR a parent process
 	// (a hook, a rebase) pointed git at; and git gets no machine key
 	cmd.Env = scrubGitEnv(os.Environ())
 	out, err := cmd.Output()
+	if ctx.Err() != nil {
+		return "", fmt.Errorf("find the repository of %s: %w", abs, ctx.Err())
+	}
 	if err != nil {
 		return abs, nil
 	}
@@ -298,7 +304,7 @@ const tokenLabel = "sock-integrations"
 // opening one repository, the hook and the server) mint once: the cache entry
 // is held under a lock.
 func (p *Projects) Ensure(ctx context.Context, dir string) (string, error) {
-	repo, err := Project(dir)
+	repo, err := Project(ctx, dir)
 	if err != nil {
 		return "", fmt.Errorf("project of %s: %w", dir, err)
 	}
@@ -419,7 +425,7 @@ func (p *Projects) Sweep(ctx context.Context) {
 		if !ok || ctx.Err() != nil {
 			continue
 		}
-		if repo, id, dev := p.meta(key); repo == "" || id == "" || !repoGone(repo, dev) {
+		if repo, id, dev := p.meta(key); repo == "" || id == "" || !goneWithin(ctx, repo, dev) {
 			continue
 		}
 		unlock, err := p.lock(ctx, key)
@@ -428,7 +434,7 @@ func (p *Projects) Sweep(ctx context.Context) {
 		}
 		// the entry may have changed while the lock was awaited
 		repo, id, dev := p.meta(key)
-		if repo == "" || id == "" || !repoGone(repo, dev) {
+		if repo == "" || id == "" || !goneWithin(ctx, repo, dev) {
 			unlock()
 			continue
 		}
@@ -464,6 +470,20 @@ func repoGone(repo, dev string) bool {
 	}
 	pd, ok := deviceOf(parent)
 	return ok && strconv.FormatUint(pd, 10) == dev
+}
+
+// goneWithin is repoGone, given up (not gone) when ctx ends first: a stat on a
+// hung network mount may never return. The goroutine of such a stat is left
+// behind, blocked in the kernel; it holds no lock and ends if the mount does.
+func goneWithin(ctx context.Context, repo, dev string) bool {
+	done := make(chan bool, 1)
+	go func() { done <- repoGone(repo, dev) }()
+	select {
+	case gone := <-done:
+		return gone
+	case <-ctx.Done():
+		return false
+	}
 }
 
 // deviceOf is statDevice; tests stand in for a mounted volume.
@@ -581,8 +601,8 @@ func writeAtomic(path string, data []byte) error {
 
 // TokenFile is where dir's project puppet token is cached, whether or not it
 // has been minted yet. The path is not a secret; the file's mode is.
-func (p *Projects) TokenFile(dir string) (string, error) {
-	repo, err := Project(dir)
+func (p *Projects) TokenFile(ctx context.Context, dir string) (string, error) {
+	repo, err := Project(ctx, dir)
 	if err != nil {
 		return "", err
 	}

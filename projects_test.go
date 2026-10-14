@@ -421,7 +421,7 @@ func TestTokenFileIsTheCachedTokensPath(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	path, err := p.TokenFile(dir)
+	path, err := p.TokenFile(t.Context(), dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -537,7 +537,7 @@ func TestProjectIgnoresTheAmbientGitEnvironment(t *testing.T) {
 	_ = os.Mkdir(other, 0o755)
 	git(t, victim, "init", "-q")
 	t.Setenv("GIT_DIR", filepath.Join(victim, ".git"))
-	got, err := Project(other)
+	got, err := Project(t.Context(), other)
 	want, _ := filepath.EvalSymlinks(other)
 	if err != nil || got != want {
 		t.Fatalf("Project(other) = %q, %v; want %q", got, err, want)
@@ -570,7 +570,7 @@ func TestEnsureGivesUpOnALockedCacheWhenTheContextEnds(t *testing.T) {
 	p := newProjects(t, f)
 	dir := filepath.Join(t.TempDir(), "proj")
 	_ = os.Mkdir(dir, 0o755)
-	repo, _ := Project(dir)
+	repo, _ := Project(t.Context(), dir)
 	unlock, err := p.lock(t.Context(), keyOf(repo))
 	if err != nil {
 		t.Fatal(err)
@@ -632,7 +632,7 @@ func TestProjectsDirIsScopedByServerAndMachineKey(t *testing.T) {
 		t.Fatal(err)
 	}
 	// an entry in the unscoped layout of before is nobody's: never sent
-	repo, _ := Project(dir)
+	repo, _ := Project(t.Context(), dir)
 	legacy := filepath.Join(projectsBase(getenv), keyOf(repo))
 	if err := os.WriteFile(legacy, []byte("sock_pt_legacy_secret\n"), 0o600); err != nil {
 		t.Fatal(err)
@@ -653,7 +653,7 @@ func TestProjectsDirIsScopedByServerAndMachineKey(t *testing.T) {
 	if len(fa.erased) != 0 || len(fb.erased) != 1 {
 		t.Fatalf("a erased %v, b erased %v", fa.erased, fb.erased)
 	}
-	if again, _ := pa.TokenFile(dir); !strings.HasPrefix(again, pa.Dir) {
+	if again, _ := pa.TokenFile(t.Context(), dir); !strings.HasPrefix(again, pa.Dir) {
 		t.Fatalf("token file %q", again)
 	}
 	if _, err := os.Stat(filepath.Join(pa.Dir, keyOf(repo))); err != nil {
@@ -748,7 +748,7 @@ func TestEnsureAdoptsThisKeysPuppetFromTheOldLayout(t *testing.T) {
 	cfg := Config{URL: "https://a.example", Token: "sock_mk_a_secret"}
 	dir := filepath.Join(t.TempDir(), "proj")
 	_ = os.Mkdir(dir, 0o755)
-	repo, _ := Project(dir)
+	repo, _ := Project(t.Context(), dir)
 	base := projectsBase(getenv)
 	writeLegacy := func(id, tok string) {
 		t.Helper()
@@ -812,5 +812,33 @@ func TestProjectsCacheIsNeverRelative(t *testing.T) {
 	p.Sweep(t.Context())
 	if ents, _ := os.ReadDir(cwd); len(ents) != 0 {
 		t.Fatalf("wrote into the working directory: %v", ents)
+	}
+}
+
+// second review 2: a stat on a hung network mount does not hold the sweep
+// past its context
+func TestSweepDoesNotWaitOnAHungMount(t *testing.T) {
+	f := newFake()
+	p := newProjects(t, f)
+	root := t.TempDir()
+	repo := filepath.Join(root, "proj")
+	_ = os.Mkdir(repo, 0o755)
+	_ = os.WriteFile(filepath.Join(root, "keep"), nil, 0o600)
+	if _, err := p.Ensure(t.Context(), repo); err != nil {
+		t.Fatal(err)
+	}
+	_ = os.RemoveAll(repo)
+	old := deviceOf
+	t.Cleanup(func() { deviceOf = old })
+	hung, left := make(chan struct{}), make(chan struct{})
+	// the mount comes back: the stat left behind returns before deviceOf is restored
+	t.Cleanup(func() { close(hung); <-left })
+	deviceOf = func(string) (uint64, bool) { <-hung; close(left); return 0, false }
+	ctx, cancel := context.WithTimeout(t.Context(), 200*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	p.Sweep(ctx)
+	if took := time.Since(start); took > time.Second || len(f.erased) != 0 {
+		t.Fatalf("sweep took %s, erased %v", took, f.erased)
 	}
 }
