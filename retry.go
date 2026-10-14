@@ -34,8 +34,8 @@ func SleepCtx(ctx context.Context, d time.Duration) error {
 
 // Do calls fn until it succeeds, fails permanently, or attempts run out.
 // Attempts below 1 count as 1; nil Sleep and Now default to SleepCtx and
-// time.Now, and a zero Max to 30s, so the zero value is safe. Retry-After
-// waits are capped at Max.
+// time.Now, and a zero Max to 30s, so the zero value is safe. A Retry-After
+// longer than Max ends Do at once with the error: it is never retried early.
 func (r Retrier) Do(ctx context.Context, fn func(context.Context) error) error {
 	attempts := max(r.Attempts, 1)
 	sleep, now := r.Sleep, r.Now
@@ -61,7 +61,12 @@ func (r Retrier) Do(ctx context.Context, fn func(context.Context) error) error {
 		}
 		wait := delay
 		if ra, ok := RetryAfter(err, now()); ok {
-			wait = min(ra, maxWait)
+			if ra > maxWait {
+				// retrying sooner is what the header asks not to do: give
+				// up, and the caller reports the wait
+				return err
+			}
+			wait = ra
 		}
 		if serr := sleep(ctx, wait); serr != nil {
 			return serr

@@ -115,9 +115,14 @@ func TestRetrierZeroValueIsSafe(t *testing.T) {
 	}
 }
 
-func TestRetryAfterCappedAtMax(t *testing.T) {
+// A Retry-After longer than Max cannot be honored inside the budget: retrying
+// sooner is what the header asks callers not to do (ADR 20's owner-direct
+// limits answer in minutes), so Do gives up at once and the caller sees the
+// wait.
+func TestRetryAfterBeyondMaxGivesUp(t *testing.T) {
 	now := time.Date(2026, 10, 10, 12, 0, 0, 0, time.UTC)
 	for name, hdr := range map[string]string{
+		"ten minutes":  "600",
 		"huge seconds": "9223372036854775807",
 		"far date":     now.AddDate(1000, 0, 0).Format(http.TimeFormat),
 	} {
@@ -126,15 +131,28 @@ func TestRetryAfterCappedAtMax(t *testing.T) {
 			calls := 0
 			err := retrier(f).Do(context.Background(), func(context.Context) error {
 				calls++
-				if calls == 1 {
-					return RateLimited(hdr)
-				}
-				return nil
+				return RateLimited(hdr)
 			})
-			if err != nil || len(f.waits) != 1 || f.waits[0] != 30*time.Second {
-				t.Fatalf("err %v waits %v", err, f.waits)
+			if err == nil || calls != 1 || len(f.waits) != 0 {
+				t.Fatalf("err %v calls %d waits %v", err, calls, f.waits)
 			}
 		})
+	}
+}
+
+// within Max the wait is the server's, then the retry goes through
+func TestRetryAfterWithinMaxIsHonored(t *testing.T) {
+	f := &fakeClock{now: time.Date(2026, 10, 10, 12, 0, 0, 0, time.UTC)}
+	calls := 0
+	err := retrier(f).Do(context.Background(), func(context.Context) error {
+		calls++
+		if calls == 1 {
+			return RateLimited("20")
+		}
+		return nil
+	})
+	if err != nil || len(f.waits) != 1 || f.waits[0] != 20*time.Second {
+		t.Fatalf("err %v waits %v", err, f.waits)
 	}
 }
 

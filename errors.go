@@ -75,7 +75,7 @@ var reasonText = map[sockv1.ErrorReason]string{
 	sockv1.ErrorReason_ERROR_REASON_NOT_FOUND:            "not found",
 	sockv1.ErrorReason_ERROR_REASON_FIELD_INVALID:        "the server rejected a field",
 	sockv1.ErrorReason_ERROR_REASON_IDEMPOTENCY_MISMATCH: "idempotency key reused with a different message",
-	sockv1.ErrorReason_ERROR_REASON_RATE_LIMITED:         "sending too fast; the server's rate limit held after retries",
+	sockv1.ErrorReason_ERROR_REASON_RATE_LIMITED:         "sending too fast",
 	sockv1.ErrorReason_ERROR_REASON_ACCOUNT_SUSPENDED:    "this account is suspended",
 	sockv1.ErrorReason_ERROR_REASON_TERMS_NOT_ACCEPTED:   "the owner has not accepted the current terms; accept them in the sock app",
 	// after the server's message, which names the limit (ADR 10): puppets
@@ -122,6 +122,11 @@ func Describe(err error) error {
 	switch {
 	case r == sockv1.ErrorReason_ERROR_REASON_FIELD_INVALID && errors.As(err, &ce):
 		return &described{text + ": " + message(ce), err}
+	case r == sockv1.ErrorReason_ERROR_REASON_RATE_LIMITED:
+		if wait, ok := RetryAfter(err, time.Now()); ok {
+			return &described{text + "; try again in " + wait.Round(time.Second).String(), err}
+		}
+		return &described{text + "; try again later", err}
 	case r == sockv1.ErrorReason_ERROR_REASON_LIMIT_REACHED:
 		limit := "an account limit is reached"
 		if errors.As(err, &ce) && ce.Message() != "" {

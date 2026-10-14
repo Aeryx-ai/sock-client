@@ -114,3 +114,14 @@ func TestDescribeLimitReachedWithoutAMessageStillSaysWhichKind(t *testing.T) {
 		t.Fatalf("Describe = %q", got)
 	}
 }
+
+// a rate limit says how long to wait, so a hook or a model can tell the user
+func TestDescribeRateLimitedNamesTheWait(t *testing.T) {
+	got := Describe(RateLimited("600")).Error()
+	if !strings.Contains(got, "10m0s") || strings.Contains(got, "after retries") {
+		t.Fatalf("Describe = %q", got)
+	}
+	if got := Describe(RateLimited("")).Error(); got == "" || strings.Contains(got, "after retries") {
+		t.Fatalf("Describe without a header = %q", got)
+	}
+}
