@@ -33,6 +33,9 @@ func Validate(c Config) error {
 	if c.Token == "" {
 		return errors.New("no token: set SOCK_TOKEN")
 	}
+	if strings.ContainsFunc(c.AccessGate, func(r rune) bool { return unicode.IsSpace(r) || unicode.IsControl(r) }) {
+		return errors.New("access gate contains whitespace or a control character; check for a stray line break")
+	}
 	if strings.ContainsFunc(c.Token, unicode.IsSpace) {
 		return errors.New("token contains whitespace; check for a stray line break or a second value")
 	}

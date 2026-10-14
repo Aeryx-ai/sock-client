@@ -137,3 +137,15 @@ func TestValidate(t *testing.T) {
 		})
 	}
 }
+
+func TestValidateRefusesAGateWithWhitespaceOrControlsWithoutEchoingIt(t *testing.T) {
+	for _, g := range []string{"a b", "a\nb", "a\x00b", "a\tb"} {
+		err := Validate(Config{URL: "https://api.example", Token: token, AccessGate: g})
+		if err == nil || strings.Contains(err.Error(), "a") && strings.Contains(err.Error(), "b") && strings.Contains(err.Error(), g) {
+			t.Fatalf("gate %q: %v", g, err)
+		}
+	}
+	if err := Validate(Config{URL: "https://api.example", Token: token, AccessGate: "gate-1"}); err != nil {
+		t.Fatal(err)
+	}
+}
