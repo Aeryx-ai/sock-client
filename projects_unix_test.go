@@ -35,3 +35,12 @@ func TestProjectDoesNotHandGitTheMachineKey(t *testing.T) {
 		}
 	}
 }
+
+// second review 3: names are matched without case (Windows ignores it), and
+// the access gate is kept from git too
+func TestProjectDoesNotHandGitTheKeyInAnyCaseNorTheGate(t *testing.T) {
+	got := scrubGitEnv([]string{"sock_token=sock_mk_x", "Git_Dir=/x", "claude_plugin_option_key=k", "SOCK_ACCESS_GATE=g", "Sock_Access_Gate=g", "PATH=/bin", "SOCK_URL=https://a"})
+	if strings.Join(got, ",") != "PATH=/bin,SOCK_URL=https://a" {
+		t.Fatalf("kept %v", got)
+	}
+}

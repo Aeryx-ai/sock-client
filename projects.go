@@ -231,12 +231,14 @@ func Project(dir string) (string, error) {
 }
 
 // scrubGitEnv is env without what git must not see: GIT_* (it would pick the
-// repository) and the machine key, which git does not need, whether as
-// SOCK_TOKEN or as a plugin option.
+// repository), the machine key, whether as SOCK_TOKEN or as a plugin option,
+// and the access gate. Names match without case, as on Windows.
 func scrubGitEnv(env []string) []string {
 	out := make([]string, 0, len(env))
 	for _, kv := range env {
-		if strings.HasPrefix(kv, "GIT_") || strings.HasPrefix(kv, "SOCK_TOKEN=") || strings.HasPrefix(kv, "CLAUDE_PLUGIN_OPTION_") {
+		name, _, _ := strings.Cut(kv, "=")
+		name = strings.ToUpper(name)
+		if strings.HasPrefix(name, "GIT_") || strings.HasPrefix(name, "CLAUDE_PLUGIN_OPTION_") || name == "SOCK_TOKEN" || name == "SOCK_ACCESS_GATE" {
 			continue
 		}
 		out = append(out, kv)
