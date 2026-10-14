@@ -3,6 +3,7 @@ package client
 import (
 	"errors"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -104,5 +105,12 @@ func TestDescribeWordsTheReasonsEveryCallerMeets(t *testing.T) {
 		if err == nil || err.Error() != want {
 			t.Errorf("%v: %v, want %q", reason, err, want)
 		}
+	}
+}
+
+func TestDescribeLimitReachedWithoutAMessageStillSaysWhichKind(t *testing.T) {
+	err := withReason(connect.NewError(connect.CodeFailedPrecondition, nil), sockv1.ErrorReason_ERROR_REASON_LIMIT_REACHED)
+	if got := Describe(err).Error(); !strings.HasPrefix(got, "an account limit is reached; erase") {
+		t.Fatalf("Describe = %q", got)
 	}
 }

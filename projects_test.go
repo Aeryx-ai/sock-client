@@ -30,8 +30,9 @@ type fakePuppets struct {
 	creates []string          // names asked for, in order
 	mints   []string          // puppet ids a token was minted for
 	erased  []string
-	// failErase, when set, answers ErasePuppet with it; failList ListPuppets
-	failErase, failList error
+	// failErase, when set, answers ErasePuppet with it; failList ListPuppets;
+	// failCreate CreatePuppet
+	failErase, failList, failCreate error
 	// takenBy: names that exist and are not ours
 	taken map[string]bool
 }
@@ -44,6 +45,9 @@ func (f *fakePuppets) CreatePuppet(_ context.Context, name, _ string) (string, s
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.creates = append(f.creates, name)
+	if f.failCreate != nil {
+		return "", "", f.failCreate
+	}
 	if f.taken[name] {
 		return "", "", withReason(connect.NewError(connect.CodeFailedPrecondition, errors.New("taken")), sockv1.ErrorReason_ERROR_REASON_PUPPET_NAME_TAKEN)
 	}
@@ -904,5 +908,38 @@ func TestInRepository(t *testing.T) {
 	}
 	if in, err := InRepository(t.Context(), sub); err != nil || !in {
 		t.Fatalf("repo subdir: %v, %v", in, err)
+	}
+}
+
+// The machine key's owner at the 100-puppet cap (ADR 10) is told what to do
+// about it, and nothing is cached for the project.
+func TestEnsureAtThePuppetLimitSaysWhatToEraseAndCachesNothing(t *testing.T) {
+	f := newFake()
+	f.failCreate = withReason(connect.NewError(connect.CodeFailedPrecondition, errors.New("limit reached: puppets per owner")), sockv1.ErrorReason_ERROR_REASON_LIMIT_REACHED)
+	p := newProjects(t, f)
+	dir := filepath.Join(t.TempDir(), "myproj")
+	if err := os.Mkdir(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	tok, err := p.Ensure(t.Context(), dir)
+	if err == nil || tok != "" {
+		t.Fatalf("token %q, err %v", tok, err)
+	}
+	for _, want := range []string{"puppets per owner", "sock puppets erase"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("error %q does not say %q", err, want)
+		}
+	}
+	if Reason(err) != sockv1.ErrorReason_ERROR_REASON_LIMIT_REACHED {
+		t.Fatalf("reason %v", Reason(err))
+	}
+	if len(f.creates) != 1 || len(f.puppets) != 0 || len(f.mints) != 0 {
+		t.Fatalf("creates %v, puppets %v, mints %v", f.creates, f.puppets, f.mints)
+	}
+	ents, _ := os.ReadDir(p.Dir)
+	for _, e := range ents {
+		if !strings.HasSuffix(e.Name(), ".lock") {
+			t.Fatalf("cached %s", e.Name())
+		}
 	}
 }
