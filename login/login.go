@@ -198,7 +198,7 @@ func (l *listener) loginURL(hub string) (string, error) {
 const donePage = `<!doctype html>
 <html lang="en">
 <head><meta charset="utf-8"><title>sock login</title></head>
-<body><p>sock received the sign-in. Close this tab and return to the terminal.</p></body>
+<body><p>sock received the sign-in. You can close this tab and return to the sock app or your terminal.</p></body>
 </html>
 `
 

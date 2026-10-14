@@ -325,3 +325,35 @@ func TestBindsLoopbackOnly(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// the page serves the CLI and the desktop app, so it names neither, and no
+// part of the request picks its words (sock-server-ajd)
+func TestDonePageIsClientNeutral(t *testing.T) {
+	var body string
+	_, err := run(t, Options{Show: func(raw string) error {
+		s := parseShown(t, raw)
+		callback(t, s.port, host(s), good(s))
+		res, err := noRedirect.Get(fmt.Sprintf("http://127.0.0.1:%d/done?client=evil", s.port))
+		if err != nil {
+			return err
+		}
+		defer func() { _ = res.Body.Close() }()
+		b, err := io.ReadAll(res.Body)
+		body = string(b)
+		return err
+	}})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if body != donePage {
+		t.Fatalf("/done served %q", body)
+	}
+	for _, word := range []string{"return to the terminal", "evil"} {
+		if strings.Contains(donePage, word) {
+			t.Errorf("done page says %q: %s", word, donePage)
+		}
+	}
+	if !strings.Contains(donePage, "the sock app or your terminal") {
+		t.Errorf("done page does not name both places to return to: %s", donePage)
+	}
+}
