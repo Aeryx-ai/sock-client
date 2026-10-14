@@ -888,3 +888,21 @@ func TestAdoptIsLockedAndNeverDuplicatesTheOldPuppet(t *testing.T) {
 		t.Fatalf("adopt: %q %v, creates %v", tok, err, f.creates)
 	}
 }
+
+// sock-mcp needs to tell a repository from a bare directory: a Codex plugin
+// server starts in the plugin cache, which is no project
+func TestInRepository(t *testing.T) {
+	bare := t.TempDir()
+	if in, err := InRepository(t.Context(), bare); err != nil || in {
+		t.Fatalf("bare dir: %v, %v", in, err)
+	}
+	repo := t.TempDir()
+	git(t, repo, "init", "-q")
+	sub := filepath.Join(repo, "sub")
+	if err := os.Mkdir(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if in, err := InRepository(t.Context(), sub); err != nil || !in {
+		t.Fatalf("repo subdir: %v, %v", in, err)
+	}
+}

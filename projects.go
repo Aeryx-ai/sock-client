@@ -202,9 +202,37 @@ func (p *Projects) logf(format string, args ...any) {
 // outside git. git runs under ctx: one that never finishes is an error, not the
 // bare directory, which would name the wrong project.
 func Project(ctx context.Context, dir string) (string, error) {
-	abs, err := filepath.Abs(dir)
+	abs, common, err := gitCommonDir(ctx, dir)
 	if err != nil {
 		return "", err
+	}
+	if common == "" {
+		return abs, nil
+	}
+	root := common
+	if filepath.Base(common) == ".git" {
+		root = filepath.Dir(common)
+	}
+	if resolved, err := filepath.EvalSymlinks(root); err == nil {
+		root = resolved
+	}
+	return root, nil
+}
+
+// InRepository reports whether dir is inside a git repository (git is
+// installed and finds one), the case where Project names a repository rather
+// than the bare directory.
+func InRepository(ctx context.Context, dir string) (bool, error) {
+	_, common, err := gitCommonDir(ctx, dir)
+	return common != "", err
+}
+
+// gitCommonDir is dir made absolute and the git common directory of the
+// repository holding it, "" outside one. git runs under ctx: one that never
+// finishes is an error.
+func gitCommonDir(ctx context.Context, dir string) (abs, common string, err error) {
+	if abs, err = filepath.Abs(dir); err != nil {
+		return "", "", err
 	}
 	if resolved, err := filepath.EvalSymlinks(abs); err == nil {
 		abs = resolved
@@ -217,23 +245,12 @@ func Project(ctx context.Context, dir string) (string, error) {
 	cmd.Env = scrubGitEnv(os.Environ())
 	out, err := cmd.Output()
 	if ctx.Err() != nil {
-		return "", fmt.Errorf("find the repository of %s: %w", abs, ctx.Err())
+		return "", "", fmt.Errorf("find the repository of %s: %w", abs, ctx.Err())
 	}
 	if err != nil {
-		return abs, nil
+		return abs, "", nil
 	}
-	common := strings.TrimSpace(string(out))
-	if common == "" {
-		return abs, nil
-	}
-	root := common
-	if filepath.Base(common) == ".git" {
-		root = filepath.Dir(common)
-	}
-	if resolved, err := filepath.EvalSymlinks(root); err == nil {
-		root = resolved
-	}
-	return root, nil
+	return abs, strings.TrimSpace(string(out)), nil
 }
 
 // scrubGitEnv is env without what git must not see: GIT_* (it would pick the
