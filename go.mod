@@ -9,4 +9,7 @@ require (
 	github.com/guygrigsby/sock-contract v0.3.1
 )
 
-require google.golang.org/protobuf v1.36.12 // indirect
+require (
+	github.com/BurntSushi/toml v1.6.0
+	google.golang.org/protobuf v1.36.12 // indirect
+)
