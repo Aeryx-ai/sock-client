@@ -117,3 +117,31 @@ func TestLoadFileConfigMachineKeyIsASecretToo(t *testing.T) {
 		t.Fatalf("got %+v, %v", f, err)
 	}
 }
+
+// The parser quotes a bare word it cannot read: an unquoted gate or token is
+// that word. The error says the line and key only.
+func TestLoadFileConfigParseErrorNeverQuotesTheValue(t *testing.T) {
+	for _, body := range []string{
+		"access_gate = hunter2\n",
+		"url = \"https://x.example\"\naccess_gate = hunter2\n",
+		"token = hunter2 hunter2\n",
+		"token = \"sock_st_ok\"\nmachine_key = 'hunter2\n",
+		"token = 0xhunter2\n",
+		"token = 12hunter2\n",
+		"token = [hunter2]\n",
+		"token = 5\nhunter2\n",
+		"hunter2 = = 1\n",
+		"token = 7\n# hunter2\n",
+		"url = \"https://x.example\"\nhunter2\n",
+		"[hunter2]\nx = = 1\n",
+	} {
+		path := filepath.Join(t.TempDir(), "config.toml")
+		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		_, err := LoadFileConfig(path)
+		if err == nil || strings.Contains(err.Error(), "hunter2") || !strings.Contains(err.Error(), "line ") {
+			t.Errorf("%q: %v", body, err)
+		}
+	}
+}

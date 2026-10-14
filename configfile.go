@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"regexp"
 
 	"github.com/BurntSushi/toml"
 )
@@ -58,10 +59,36 @@ func LoadFileConfig(path string) (FileConfig, error) {
 		return f, fmt.Errorf("config: %w", err)
 	}
 	if _, err := toml.DecodeFile(path, &f); err != nil {
-		return f, fmt.Errorf("config: parse %s: %w", path, err)
+		return FileConfig{}, ParseError(path, err)
 	}
 	if (f.Token != "" || f.PuppetToken != "" || f.MachineKey != "" || f.AccessGate != "") && info.Mode().Perm()&0o077 != 0 {
 		return FileConfig{}, fmt.Errorf("config: %s holds a secret but is readable by others (mode %o); run chmod 600 %s", path, info.Mode().Perm(), path)
 	}
 	return f, nil
+}
+
+// fileKeys are the keys a sock config file holds, the only ones an error
+// may name: any other word on a line could be a pasted secret.
+var fileKeys = map[string]bool{"url": true, "token": true, "puppet_token": true, "machine_key": true, "access_gate": true}
+
+// tomlWhere finds the line and last key the parser reports.
+var tomlWhere = regexp.MustCompile(`^toml: line (\d+)(?: \(last key "([^"]*)"\))?`)
+
+// ParseError words a failure to decode the config file at path without
+// quoting the file: the parser echoes the text it choked on, and an
+// unquoted token or gate is that text. It names the line, and the key when
+// it is one of sock's.
+func ParseError(path string, err error) error {
+	var pathErr *fs.PathError
+	if errors.As(err, &pathErr) {
+		return fmt.Errorf("config: %w", err)
+	}
+	msg := "config: parse " + path
+	if m := tomlWhere.FindStringSubmatch(err.Error()); m != nil {
+		msg += ": line " + m[1]
+		if fileKeys[m[2]] {
+			msg += " (key " + m[2] + ")"
+		}
+	}
+	return errors.New(msg + ": not a valid sock config; quote string values")
 }
