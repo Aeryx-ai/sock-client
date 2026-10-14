@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/guygrigsby/sock-contract/gen/go/sock/v1/sockv1connect"
 )
@@ -178,5 +179,63 @@ func TestResolvePuppetPassesAPuppetTokenThrough(t *testing.T) {
 	o.WorkDir = "/nonexistent"
 	if c, err := ResolvePuppet(t.Context(), o); err != nil || c.Token != "sock_pt_env_secret" {
 		t.Fatalf("got %+v, %v", c, err)
+	}
+}
+
+// the hook resolves on every send (sock-cli-7ut): the sweep runs at most once
+// per sweepInterval per cache, whoever calls
+func TestResolvePuppetSweepsAtMostOncePerInterval(t *testing.T) {
+	f, url := machineKeyHub(t)
+	root := t.TempDir()
+	a, b := gitInit(t, filepath.Join(root, "a")), gitInit(t, filepath.Join(root, "b"))
+	o := puppetEnv(t, nil, fmt.Sprintf("url = %q\nmachine_key = \"sock_mk_dev_secret\"\n", url))
+	resolve := func(dir string) {
+		t.Helper()
+		o.WorkDir = dir
+		if _, err := ResolvePuppet(t.Context(), o); err != nil {
+			t.Fatal(err)
+		}
+	}
+	resolve(a)
+	resolve(b)
+	if err := os.RemoveAll(a); err != nil {
+		t.Fatal(err)
+	}
+	resolve(b)
+	if len(f.erased) != 0 {
+		t.Fatalf("swept within the interval: %v", f.erased)
+	}
+	dir := ProjectsDir(o.Getenv, Config{URL: url, Token: "sock_mk_dev_secret"})
+	old := time.Now().Add(-sweepInterval - time.Minute)
+	if err := os.Chtimes(filepath.Join(dir, ".swept"), old, old); err != nil {
+		t.Fatal(err)
+	}
+	resolve(b)
+	if len(f.erased) != 1 {
+		t.Fatalf("no sweep after the interval: %v", f.erased)
+	}
+}
+
+// TrustCache uses the cached token without asking the hub: the hook's hot
+// path, which recovers from TOKEN_INVALID by resolving again without it
+func TestResolvePuppetTrustCacheSkipsTheTokenCheck(t *testing.T) {
+	f, url := machineKeyHub(t)
+	proj := gitInit(t, filepath.Join(t.TempDir(), "proj"))
+	o := puppetEnv(t, nil, fmt.Sprintf("url = %q\nmachine_key = \"sock_mk_dev_secret\"\n", url))
+	o.WorkDir = proj
+	for range 2 {
+		if _, err := ResolvePuppet(t.Context(), o); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if f.getMes != 1 {
+		t.Fatalf("checked the cached token %d times, want once", f.getMes)
+	}
+	o.TrustCache = true
+	if c, err := ResolvePuppet(t.Context(), o); err != nil || c.Token != "sock_pt_d_s" {
+		t.Fatalf("got %+v, %v", c, err)
+	}
+	if f.getMes != 1 {
+		t.Fatalf("checked a trusted cached token: %d GetMe", f.getMes)
 	}
 }

@@ -26,6 +26,11 @@ type PuppetOptions struct {
 	NoProjectHint string
 	// UserAgent is sent while making the project's puppet.
 	UserAgent string
+	// TrustCache uses a cached project puppet token without asking the hub
+	// whether it still works. For a hot path that recovers itself: when the
+	// hub answers TOKEN_INVALID, resolve again without it, which replaces the
+	// token of an erased puppet.
+	TrustCache bool
 	// Log takes one line per notable event, never a secret. Nil: silent.
 	Log func(format string, args ...any)
 }
@@ -35,6 +40,9 @@ func (o PuppetOptions) logf(format string, args ...any) {
 		o.Log(format, args...)
 	}
 }
+
+// sweepInterval is how often ProjectPuppet sweeps a cache (Projects.SweepEvery).
+const sweepInterval = 6 * time.Hour
 
 // ErrNoPuppetCredential means no source holds a credential a puppet may use:
 // SOCK_TOKEN is unset and the config file has neither machine_key nor
@@ -97,7 +105,8 @@ func LoadPuppetConfig(o PuppetOptions) (Config, error) {
 // CLAUDE_PROJECT_DIR, else WorkDir when it names one. When it does not
 // (inside PLUGIN_ROOT, or outside any git repository) a key from the config
 // file falls back to the file's puppet_token, and a key from SOCK_TOKEN
-// fails: one source, never a mix. The machine key reaches the hub only to
+// fails: one source, never a mix. Puppets of removed repositories are swept
+// at most once per sweepInterval. The machine key reaches the hub only to
 // make, list and erase puppets. A failure never carries the key.
 func ProjectPuppet(ctx context.Context, cfg Config, o PuppetOptions) (Config, error) {
 	if TokenKind(cfg.Token) != KindMachineKey {
@@ -137,11 +146,13 @@ func ProjectPuppet(ctx context.Context, cfg Config, o PuppetOptions) (Config, er
 		Host: ShortHost(),
 		Log:  o.Log,
 	}
-	// a cached token the hub rejects (the puppet was erased) is replaced
-	projects.Check = NewTokenCheck(cfg, o.UserAgent)
+	if !o.TrustCache {
+		// a cached token the hub rejects (the puppet was erased) is replaced
+		projects.Check = NewTokenCheck(cfg, o.UserAgent)
+	}
 	// separate budgets: a slow sweep must not leave Ensure without time
 	sweepCtx, cancelSweep := context.WithTimeout(ctx, 20*time.Second)
-	projects.Sweep(sweepCtx)
+	projects.SweepEvery(sweepCtx, sweepInterval)
 	cancelSweep()
 	ensureCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()

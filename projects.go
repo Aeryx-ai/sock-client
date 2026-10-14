@@ -481,6 +481,32 @@ func (p *Projects) Sweep(ctx context.Context) {
 	}
 }
 
+// SweepEvery is Sweep at most once per every for this cache, whoever calls:
+// a removed repository's puppet need not go at once, and the hook resolves on
+// every send. The stamp is taken before sweeping, so concurrent callers do not
+// all sweep; a sweep cut short keeps its entries for the next turn. A stamp
+// from the future (a clock set back) is due.
+func (p *Projects) SweepEvery(ctx context.Context, every time.Duration) {
+	if !filepath.IsAbs(p.Dir) {
+		return
+	}
+	stamp := filepath.Join(p.Dir, ".swept")
+	if info, err := os.Stat(stamp); err == nil {
+		if age := time.Since(info.ModTime()); age >= 0 && age < every {
+			return
+		}
+	}
+	// no cache directory yet: nothing to sweep
+	if err := os.WriteFile(stamp, nil, 0o600); err != nil {
+		return
+	}
+	now := time.Now()
+	if err := os.Chtimes(stamp, now, now); err != nil {
+		return
+	}
+	p.Sweep(ctx)
+}
+
 // repoGone says a repository was removed: it does not exist while its parent
 // directory exists, holds something and is on the device the repository was
 // on (dev, recorded when the puppet was made; empty when unknown). A missing

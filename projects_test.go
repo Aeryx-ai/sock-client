@@ -380,6 +380,14 @@ type identityFake struct {
 	sockv1connect.UnimplementedIdentityServiceHandler
 	auth   []string
 	create *sockv1.CreatePuppetRequest
+	erased []string
+	getMes int
+}
+
+func (f *identityFake) GetMe(_ context.Context, r *connect.Request[sockv1.GetMeRequest]) (*connect.Response[sockv1.GetMeResponse], error) {
+	f.auth = append(f.auth, r.Header().Get("Authorization"))
+	f.getMes++
+	return connect.NewResponse(&sockv1.GetMeResponse{}), nil
 }
 
 func (f *identityFake) CreatePuppet(_ context.Context, r *connect.Request[sockv1.CreatePuppetRequest]) (*connect.Response[sockv1.CreatePuppetResponse], error) {
@@ -390,6 +398,7 @@ func (f *identityFake) CreatePuppet(_ context.Context, r *connect.Request[sockv1
 
 func (f *identityFake) ErasePuppet(_ context.Context, r *connect.Request[sockv1.ErasePuppetRequest]) (*connect.Response[sockv1.ErasePuppetResponse], error) {
 	f.auth = append(f.auth, r.Header().Get("Authorization"))
+	f.erased = append(f.erased, r.Msg.GetPuppetId())
 	return connect.NewResponse(&sockv1.ErasePuppetResponse{}), nil
 }
 
@@ -941,5 +950,57 @@ func TestEnsureAtThePuppetLimitSaysWhatToEraseAndCachesNothing(t *testing.T) {
 		if !strings.HasSuffix(e.Name(), ".lock") {
 			t.Fatalf("cached %s", e.Name())
 		}
+	}
+}
+
+// SweepEvery sweeps a cache at most once per interval: the hook calls it on
+// every send (sock-cli-7ut). A stamp from the future (a clock set back) does
+// not stop sweeping for good.
+func TestSweepEveryRunsAtMostOncePerInterval(t *testing.T) {
+	f := newFake()
+	p := newProjects(t, f)
+	root := t.TempDir()
+	gone := func(name string) {
+		t.Helper()
+		dir := filepath.Join(root, name)
+		_ = os.Mkdir(dir, 0o755)
+		if _, err := p.Ensure(t.Context(), dir); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.RemoveAll(dir); err != nil {
+			t.Fatal(err)
+		}
+	}
+	_ = os.Mkdir(filepath.Join(root, "kept"), 0o755)
+	gone("one")
+	p.SweepEvery(t.Context(), time.Hour)
+	if len(f.erased) != 1 {
+		t.Fatalf("first sweep erased %v", f.erased)
+	}
+	gone("two")
+	p.SweepEvery(t.Context(), time.Hour)
+	if len(f.erased) != 1 {
+		t.Fatalf("swept again within the interval: %v", f.erased)
+	}
+	stamp := filepath.Join(p.Dir, ".swept")
+	old := time.Now().Add(-2 * time.Hour)
+	if err := os.Chtimes(stamp, old, old); err != nil {
+		t.Fatal(err)
+	}
+	p.SweepEvery(t.Context(), time.Hour)
+	if len(f.erased) != 2 {
+		t.Fatalf("no sweep after the interval: %v", f.erased)
+	}
+	gone("three")
+	future := time.Now().Add(48 * time.Hour)
+	if err := os.Chtimes(stamp, future, future); err != nil {
+		t.Fatal(err)
+	}
+	p.SweepEvery(t.Context(), time.Hour)
+	if len(f.erased) != 3 {
+		t.Fatalf("a stamp from the future stopped the sweep: %v", f.erased)
+	}
+	if info, err := os.Stat(stamp); err != nil || info.Mode().Perm() != 0o600 {
+		t.Fatalf("stamp %v: %v", info, err)
 	}
 }
