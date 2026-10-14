@@ -328,8 +328,8 @@ func (p *Projects) Ensure(ctx context.Context, dir string) (string, error) {
 		p.logf("the puppet of %s is gone; making another", cleanName(filepath.Base(repo)))
 		p.forget(key)
 	}
-	if tok := p.adopt(ctx, key, repo); tok != "" {
-		return tok, nil
+	if tok, err := p.adopt(ctx, key, repo); err != nil || tok != "" {
+		return tok, err
 	}
 	project := cleanName(filepath.Base(repo))
 	name := puppetName(project, p.Host)
@@ -355,27 +355,41 @@ func (p *Projects) Ensure(ctx context.Context, dir string) (string, error) {
 // parent) into this cache and returns its token, when its puppet is one this
 // key lists: the listing is what ties the old entry to this hub and this key,
 // so no other server's token is ever offered. Copied, not moved: a reader not
-// yet upgraded keeps using it. Anything else, an unlisted puppet included,
-// returns "" and Ensure mints as before.
-func (p *Projects) adopt(ctx context.Context, key, repo string) string {
+// yet upgraded keeps using it. The entry is read under the old layout's lock,
+// the one its writers hold, so its id and token belong together. An entry
+// that is not this key's returns "" and Ensure mints as before; a listing that
+// fails is an error, since minting then would orphan the old puppet behind a
+// duplicate.
+func (p *Projects) adopt(ctx context.Context, key, repo string) (string, error) {
 	old := &Projects{Dir: filepath.Dir(p.Dir)}
+	if _, err := os.Stat(filepath.Join(old.Dir, key+".meta")); err != nil {
+		return "", nil
+	}
+	unlock, err := old.lock(ctx, key)
+	if err != nil {
+		return "", fmt.Errorf("old puppet cache: %w", err)
+	}
 	oldRepo, id, _ := old.meta(key)
 	tok := old.cached(key)
+	unlock()
 	if oldRepo != repo || id == "" || tok == "" {
-		return ""
+		return "", nil
 	}
 	list, err := p.API.ListPuppets(ctx)
-	if err != nil || !slices.ContainsFunc(list, func(pu PuppetInfo) bool { return pu.ID == id }) {
-		return ""
+	if err != nil {
+		return "", fmt.Errorf("list this key's puppets to adopt the old cache's: %w", Describe(err))
+	}
+	if !slices.ContainsFunc(list, func(pu PuppetInfo) bool { return pu.ID == id }) {
+		return "", nil
 	}
 	if p.Check != nil && Reason(p.Check(ctx, tok)) == sockv1.ErrorReason_ERROR_REASON_TOKEN_INVALID {
-		return ""
+		return "", nil
 	}
 	if err := p.store(key, repo, id, tok); err != nil {
-		return ""
+		return "", err
 	}
 	p.logf("adopted the puppet of %s from the old cache", cleanName(filepath.Base(repo)))
-	return tok
+	return tok, nil
 }
 
 // hashed makes the puppet under a name that carries a hash of the repository

@@ -30,8 +30,8 @@ type fakePuppets struct {
 	creates []string          // names asked for, in order
 	mints   []string          // puppet ids a token was minted for
 	erased  []string
-	// failErase, when set, answers ErasePuppet with it
-	failErase error
+	// failErase, when set, answers ErasePuppet with it; failList ListPuppets
+	failErase, failList error
 	// takenBy: names that exist and are not ours
 	taken map[string]bool
 }
@@ -61,6 +61,9 @@ func (f *fakePuppets) CreatePuppet(_ context.Context, name, _ string) (string, s
 func (f *fakePuppets) ListPuppets(context.Context) ([]PuppetInfo, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.failList != nil {
+		return nil, f.failList
+	}
 	var out []PuppetInfo
 	for id, n := range f.puppets {
 		out = append(out, PuppetInfo{ID: id, Name: n})
@@ -840,5 +843,48 @@ func TestSweepDoesNotWaitOnAHungMount(t *testing.T) {
 	p.Sweep(ctx)
 	if took := time.Since(start); took > time.Second || len(f.erased) != 0 {
 		t.Fatalf("sweep took %s, erased %v", took, f.erased)
+	}
+}
+
+// second review 4: the old entry's id and token are read under the old
+// layout's lock, the one a binary not yet upgraded writes them under, so a
+// half-written pair is never adopted; and a listing that fails leaves the old
+// puppet to adopt next time rather than making a duplicate
+func TestAdoptIsLockedAndNeverDuplicatesTheOldPuppet(t *testing.T) {
+	state := t.TempDir()
+	getenv := func(k string) string { return map[string]string{"XDG_STATE_HOME": state}[k] }
+	cfg := Config{URL: "https://a.example", Token: "sock_mk_a_secret"}
+	dir := filepath.Join(t.TempDir(), "proj")
+	_ = os.Mkdir(dir, 0o755)
+	repo, _ := Project(t.Context(), dir)
+	old := &Projects{Dir: projectsBase(getenv)}
+	if err := old.prepare(); err != nil {
+		t.Fatal(err)
+	}
+	if err := old.store(keyOf(repo), repo, "pup-old", "sock_pt_pupold_secret"); err != nil {
+		t.Fatal(err)
+	}
+	f := newFake()
+	f.puppets["pup-old"] = "proj on mac"
+	p := &Projects{API: f, Dir: ProjectsDir(getenv, cfg), Host: "mac"}
+
+	unlock, err := old.lock(t.Context(), keyOf(repo))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 300*time.Millisecond)
+	defer cancel()
+	if tok, err := p.Ensure(ctx, dir); err == nil || len(f.creates) != 0 {
+		t.Fatalf("ensure while the old entry is locked: %q %v, creates %v", tok, err, f.creates)
+	}
+	unlock()
+
+	f.failList = Unavailable()
+	if tok, err := p.Ensure(t.Context(), dir); err == nil || len(f.creates) != 0 {
+		t.Fatalf("ensure with the listing down: %q %v, creates %v", tok, err, f.creates)
+	}
+	f.failList = nil
+	if tok, err := p.Ensure(t.Context(), dir); err != nil || tok != "sock_pt_pupold_secret" || len(f.creates) != 0 {
+		t.Fatalf("adopt: %q %v, creates %v", tok, err, f.creates)
 	}
 }
