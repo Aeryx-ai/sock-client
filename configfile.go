@@ -12,9 +12,12 @@ import (
 
 // FileConfig is what the sock config file holds. Every key is optional.
 type FileConfig struct {
-	URL        string `toml:"url"`
-	Token      string `toml:"token"`
-	AccessGate string `toml:"access_gate"`
+	URL   string `toml:"url"`
+	Token string `toml:"token"`
+	// PuppetToken is the puppet token sock-mcp reads (sock puppets use writes
+	// it). Token stays the human session token sock login writes.
+	PuppetToken string `toml:"puppet_token"`
+	AccessGate  string `toml:"access_gate"`
 }
 
 // DefaultConfigPath is $XDG_CONFIG_HOME/sock/config.toml, else
@@ -54,7 +57,7 @@ func LoadFileConfig(path string) (FileConfig, error) {
 	if _, err := toml.DecodeFile(path, &f); err != nil {
 		return f, fmt.Errorf("config: parse %s: %w", path, err)
 	}
-	if (f.Token != "" || f.AccessGate != "") && info.Mode().Perm()&0o077 != 0 {
+	if (f.Token != "" || f.PuppetToken != "" || f.AccessGate != "") && info.Mode().Perm()&0o077 != 0 {
 		return FileConfig{}, fmt.Errorf("config: %s holds a secret but is readable by others (mode %o); run chmod 600 %s", path, info.Mode().Perm(), path)
 	}
 	return f, nil

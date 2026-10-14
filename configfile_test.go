@@ -95,3 +95,14 @@ func TestLoadFileConfigParseErrorHidesContents(t *testing.T) {
 		t.Fatalf("error does not say where: %v", err)
 	}
 }
+
+func TestLoadFileConfigPuppetTokenIsASecretToo(t *testing.T) {
+	p := writeConfig(t, 0o644, "puppet_token = \"sock_pt_a\"\n")
+	if _, err := LoadFileConfig(p); err == nil || !strings.Contains(err.Error(), "chmod 600") {
+		t.Fatalf("err = %v", err)
+	}
+	p = writeConfig(t, 0o600, "token = \"sock_st_h\"\npuppet_token = \"sock_pt_a\"\n")
+	if f, err := LoadFileConfig(p); err != nil || f.PuppetToken != "sock_pt_a" || f.Token != "sock_st_h" {
+		t.Fatalf("got %+v, %v", f, err)
+	}
+}
