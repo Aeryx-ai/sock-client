@@ -1,6 +1,7 @@
 package client
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -10,6 +11,7 @@ import (
 	"connectrpc.com/connect"
 
 	sockv1 "github.com/guygrigsby/sock-contract/gen/go/sock/v1"
+	"github.com/guygrigsby/sock-contract/gen/go/sock/v1/sockv1connect"
 )
 
 // headersAt sends one request through New's transport for a config pointing at
@@ -96,3 +98,36 @@ func TestNewBuildsAModerationClient(t *testing.T) {
 		t.Fatalf("clients %+v", c)
 	}
 }
+
+// Options instrument the clients: the transport wraps the base beneath the
+// bearer, and the Connect options reach every call.
+func TestOptionsWrapTheTransportAndTheCalls(t *testing.T) {
+	srv := httptest.NewServer(http.NotFoundHandler())
+	t.Cleanup(srv.Close)
+	var sawBearer atomic.Bool
+	var procedure atomic.Value
+	wrap := func(next http.RoundTripper) http.RoundTripper {
+		return roundTripFunc(func(r *http.Request) (*http.Response, error) {
+			sawBearer.Store(r.Header.Get("Authorization") == "Bearer "+token)
+			return next.RoundTrip(r)
+		})
+	}
+	seen := connect.UnaryInterceptorFunc(func(next connect.UnaryFunc) connect.UnaryFunc {
+		return func(ctx context.Context, req connect.AnyRequest) (connect.AnyResponse, error) {
+			procedure.Store(req.Spec().Procedure)
+			return next(ctx, req)
+		}
+	})
+	c := New(Config{URL: srv.URL, Token: token}, "t", WithTransport(wrap), WithConnectOptions(connect.WithInterceptors(seen)))
+	_, _ = c.Identity.GetMe(t.Context(), connect.NewRequest(&sockv1.GetMeRequest{}))
+	if !sawBearer.Load() {
+		t.Fatal("the wrapped transport did not see the bearer")
+	}
+	if p, _ := procedure.Load().(string); p != sockv1connect.IdentityServiceGetMeProcedure {
+		t.Fatalf("interceptor saw %q", p)
+	}
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }

@@ -6,6 +6,8 @@ import (
 	"net/url"
 	"time"
 
+	"connectrpc.com/connect"
+
 	"github.com/guygrigsby/sock-contract/gen/go/sock/v1/sockv1connect"
 )
 
@@ -22,19 +24,46 @@ type Clients struct {
 	Moderation sockv1connect.ModerationServiceClient
 }
 
+// Option adjusts the clients New builds.
+type Option func(*options)
+
+type options struct {
+	wrap func(http.RoundTripper) http.RoundTripper
+	rpc  []connect.ClientOption
+}
+
+// WithTransport wraps the base transport, beneath the one that adds the
+// token, gate and user agent: instrumentation sees each request as sent.
+func WithTransport(wrap func(http.RoundTripper) http.RoundTripper) Option {
+	return func(o *options) { o.wrap = wrap }
+}
+
+// WithConnectOptions passes opts (an interceptor, say) to every client.
+func WithConnectOptions(opts ...connect.ClientOption) Option {
+	return func(o *options) { o.rpc = append(o.rpc, opts...) }
+}
+
 // New builds clients that send cfg.Token (when there is one: sign-in and
 // registration run before a token exists) and cfg.AccessGate (when set) to the
 // configured scheme and host only, and userAgent everywhere. New does not
 // validate cfg; callers that need a token call Validate first. No client-wide
 // timeout: Subscribe streams indefinitely. Redirects are never followed.
-func New(cfg Config, userAgent string) Clients {
+func New(cfg Config, userAgent string, opts ...Option) Clients {
+	var o options
+	for _, opt := range opts {
+		opt(&o)
+	}
+	rt := http.DefaultTransport
+	if o.wrap != nil {
+		rt = o.wrap(rt)
+	}
 	base, _ := url.Parse(cfg.URL) // Validate checked the URL; a nil-safe zero URL matches nothing
 	if base == nil {
 		base = &url.URL{}
 	}
 	hc := &http.Client{
 		Transport: &transport{
-			base:   http.DefaultTransport,
+			base:   rt,
 			token:  cfg.Token,
 			gate:   cfg.AccessGate,
 			ua:     userAgent,
@@ -44,9 +73,9 @@ func New(cfg Config, userAgent string) Clients {
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 	}
 	return Clients{
-		Identity:   sockv1connect.NewIdentityServiceClient(hc, cfg.URL),
-		Messaging:  sockv1connect.NewMessagingServiceClient(hc, cfg.URL),
-		Moderation: sockv1connect.NewModerationServiceClient(hc, cfg.URL),
+		Identity:   sockv1connect.NewIdentityServiceClient(hc, cfg.URL, o.rpc...),
+		Messaging:  sockv1connect.NewMessagingServiceClient(hc, cfg.URL, o.rpc...),
+		Moderation: sockv1connect.NewModerationServiceClient(hc, cfg.URL, o.rpc...),
 	}
 }
 
