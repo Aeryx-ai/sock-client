@@ -257,14 +257,12 @@ func gitCommonDir(ctx context.Context, dir string) (abs, common string, err erro
 // repository), the machine key, whether as SOCK_TOKEN or as a plugin option,
 // and the access gate. Names match without case, as on Windows.
 func scrubGitEnv(env []string) []string {
+	env = ScrubSecrets(env)
 	out := make([]string, 0, len(env))
 	for _, kv := range env {
-		name, _, _ := strings.Cut(kv, "=")
-		name = strings.ToUpper(name)
-		if strings.HasPrefix(name, "GIT_") || strings.HasPrefix(name, "CLAUDE_PLUGIN_OPTION_") || name == "SOCK_TOKEN" || name == "SOCK_ACCESS_GATE" {
-			continue
+		if !strings.HasPrefix(strings.ToUpper(kv), "GIT_") {
+			out = append(out, kv)
 		}
-		out = append(out, kv)
 	}
 	return out
 }
