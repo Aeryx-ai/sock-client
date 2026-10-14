@@ -1,0 +1,4 @@
+go test fuzz v1
+string("http://[::1]:8080/path?token=sock_pt_leakleakleak")
+string("sock_pt_abcdef123456")
+string("")

@@ -1,0 +1,4 @@
+go test fuzz v1
+string("http://localhost.evil.example")
+string("sock_st_abcdef123456")
+string("")
