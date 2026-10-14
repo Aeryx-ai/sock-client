@@ -665,3 +665,15 @@ func (p *Projects) TokenFile(ctx context.Context, dir string) (string, error) {
 	}
 	return filepath.Join(p.Dir, keyOf(repo)), nil
 }
+
+// IsProjectPuppetName reports whether name has the shape Ensure gives a
+// project puppet, "<project> on <host>" (puppetName, the host a ShortHost).
+// Anyone may name a puppet so: a match is a candidate, never proof.
+func IsProjectPuppetName(name string) bool {
+	i := strings.LastIndex(name, " on ")
+	if i < 0 || utf8.RuneCountInString(name) > 64 || cleanName(name) != name {
+		return false
+	}
+	host := name[i+len(" on "):]
+	return strings.TrimSpace(name[:i]) != "" && host != "" && !strings.ContainsAny(host, " .")
+}

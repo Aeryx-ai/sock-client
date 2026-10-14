@@ -1004,3 +1004,26 @@ func TestSweepEveryRunsAtMostOncePerInterval(t *testing.T) {
 		t.Fatalf("stamp %v: %v", info, err)
 	}
 }
+
+// IsProjectPuppetName knows the names Ensure gives, and only those shapes:
+// sock puppets prune matches by it (sock-cli-85u)
+func TestIsProjectPuppetName(t *testing.T) {
+	for _, name := range []string{
+		puppetName("proj", "mac"),
+		puppetName("proj-"+shortHash("/x/proj"), "mac"),
+		puppetName(strings.Repeat("p", 80), "build-7"),
+		puppetName("my proj on fire", "mac"),
+	} {
+		if !IsProjectPuppetName(name) {
+			t.Errorf("%q not a project puppet name", name)
+		}
+	}
+	for _, name := range []string{
+		"build-bot", "on mac", " on mac", "proj on ", "proj on my mac", "proj on mac.local",
+		"proj\u200b on mac", strings.Repeat("p", 60) + " on mac",
+	} {
+		if IsProjectPuppetName(name) {
+			t.Errorf("%q taken for a project puppet name", name)
+		}
+	}
+}
