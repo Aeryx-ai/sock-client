@@ -348,12 +348,12 @@ func TestSweepKeepsTheEntryWhenEraseFailsAndDropsItWhenTheHubForgotIt(t *testing
 	}
 }
 
-func TestDefaultProjectsDir(t *testing.T) {
+func TestProjectsBase(t *testing.T) {
 	env := func(m map[string]string) func(string) string { return func(k string) string { return m[k] } }
-	if got := DefaultProjectsDir(env(map[string]string{"XDG_STATE_HOME": "/x"})); got != "/x/sock-integrations/puppets" {
+	if got := projectsBase(env(map[string]string{"XDG_STATE_HOME": "/x"})); got != "/x/sock-integrations/puppets" {
 		t.Fatal(got)
 	}
-	if got := DefaultProjectsDir(env(map[string]string{"HOME": "/h"})); got != "/h/.local/state/sock-integrations/puppets" {
+	if got := projectsBase(env(map[string]string{"HOME": "/h"})); got != "/h/.local/state/sock-integrations/puppets" {
 		t.Fatal(got)
 	}
 }
@@ -598,5 +598,64 @@ func TestSweepDropsOldTempFiles(t *testing.T) {
 	}
 	if _, err := os.Stat(fresh); err != nil {
 		t.Fatal("a fresh temp file (a write in progress) was removed")
+	}
+}
+
+// security review 1: a machine key for one server never sends its cached
+// puppet token to another server, nor reads one cached for another key
+func TestProjectsDirIsScopedByServerAndMachineKey(t *testing.T) {
+	state := t.TempDir()
+	getenv := func(k string) string { return map[string]string{"XDG_STATE_HOME": state}[k] }
+	a := Config{URL: "https://a.example", Token: "sock_mk_a_secret"}
+	b := Config{URL: "https://b.example", Token: "sock_mk_a_secret"}
+	k2 := Config{URL: "https://a.example", Token: "sock_mk_b_secret"}
+	dirs := map[string]bool{}
+	for _, c := range []Config{a, b, k2} {
+		d := ProjectsDir(getenv, c)
+		if !strings.HasPrefix(d, projectsBase(getenv)+string(filepath.Separator)) || strings.Contains(d, "secret") {
+			t.Fatalf("dir %q", d)
+		}
+		dirs[d] = true
+	}
+	if len(dirs) != 3 || ProjectsDir(getenv, a) != ProjectsDir(getenv, Config{URL: a.URL, Token: a.Token}) {
+		t.Fatalf("dirs %v", dirs)
+	}
+
+	dir := filepath.Join(t.TempDir(), "proj")
+	_ = os.Mkdir(dir, 0o755)
+	fa, fb := newFake(), newFake()
+	fb.next = 10 // the servers' ids differ
+	pa := &Projects{API: fa, Dir: ProjectsDir(getenv, a), Host: "mac"}
+	tokA, err := pa.Ensure(t.Context(), dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// an entry in the unscoped layout of before is nobody's: never sent
+	repo, _ := Project(dir)
+	legacy := filepath.Join(projectsBase(getenv), keyOf(repo))
+	if err := os.WriteFile(legacy, []byte("sock_pt_legacy_secret\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var checked []string
+	pb := &Projects{API: fb, Dir: ProjectsDir(getenv, b), Host: "mac", Check: func(_ context.Context, tok string) error {
+		checked = append(checked, tok)
+		return nil
+	}}
+	tokB, err := pb.Ensure(t.Context(), dir)
+	if err != nil || tokB == tokA || len(checked) != 0 || len(fb.creates) != 1 {
+		t.Fatalf("b got %q (%v), checked %v, creates %v", tokB, err, checked, fb.creates)
+	}
+	// b's sweep never touches a's entries
+	_ = os.RemoveAll(dir)
+	_ = os.WriteFile(filepath.Join(filepath.Dir(dir), "keep"), nil, 0o600)
+	pb.Sweep(t.Context())
+	if len(fa.erased) != 0 || len(fb.erased) != 1 {
+		t.Fatalf("a erased %v, b erased %v", fa.erased, fb.erased)
+	}
+	if again, _ := pa.TokenFile(dir); !strings.HasPrefix(again, pa.Dir) {
+		t.Fatalf("token file %q", again)
+	}
+	if _, err := os.Stat(filepath.Join(pa.Dir, keyOf(repo))); err != nil {
+		t.Fatalf("a's entry was swept by b: %v", err)
 	}
 }

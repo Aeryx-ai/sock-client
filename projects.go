@@ -130,7 +130,7 @@ func (a *connectPuppets) ErasePuppet(ctx context.Context, id string) error {
 // agree on which puppet a project is.
 type Projects struct {
 	API PuppetAPI
-	// Dir is the cache: DefaultProjectsDir.
+	// Dir is the cache of the machine key API speaks as: ProjectsDir.
 	Dir string
 	// Host is the machine's short name, the " on <host>" of a puppet's name.
 	Host string
@@ -153,8 +153,18 @@ func NewTokenCheck(cfg Config, userAgent string) func(context.Context, string) e
 	}
 }
 
-// DefaultProjectsDir is ${XDG_STATE_HOME:-~/.local/state}/sock-integrations/puppets.
-func DefaultProjectsDir(getenv func(string) string) string {
+// ProjectsDir is the cache of one machine key on one server:
+// ${XDG_STATE_HOME:-~/.local/state}/sock-integrations/puppets/<scope>, scope a
+// hash of cfg's URL and token. A puppet token is only ever offered to the
+// server, and only read back by the key, that minted it; another key's sweep
+// never sees it. Entries of the unscoped layout of before sit in the parent
+// and are never read.
+func ProjectsDir(getenv func(string) string, cfg Config) string {
+	sum := sha256.Sum256([]byte(cfg.URL + "\x00" + cfg.Token))
+	return filepath.Join(projectsBase(getenv), hex.EncodeToString(sum[:])[:32])
+}
+
+func projectsBase(getenv func(string) string) string {
 	state := getenv("XDG_STATE_HOME")
 	if state == "" {
 		state = filepath.Join(getenv("HOME"), ".local", "state")
