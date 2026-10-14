@@ -76,3 +76,22 @@ func TestDefaultConfigPath(t *testing.T) {
 		t.Fatal("no XDG_CONFIG_HOME and no HOME must be an error")
 	}
 }
+
+// A malformed file must not echo what it holds: the parser quotes the text it
+// choked on, and that text can be the token.
+func TestLoadFileConfigParseErrorHidesContents(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(path, []byte("token = sock_pt_secretvalue\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := LoadFileConfig(path)
+	if err == nil {
+		t.Fatal("malformed file parsed")
+	}
+	if strings.Contains(err.Error(), "secretvalue") {
+		t.Fatalf("error leaks the file's contents: %v", err)
+	}
+	if !strings.Contains(err.Error(), "line 1") {
+		t.Fatalf("error does not say where: %v", err)
+	}
+}
