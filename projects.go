@@ -191,7 +191,7 @@ func Project(dir string) (string, error) {
 	}
 	cmd := exec.Command("git", "-C", abs, "rev-parse", "--path-format=absolute", "--git-common-dir")
 	// the project is the one dir is in, not whatever GIT_DIR a parent process
-	// (a hook, a rebase) pointed git at
+	// (a hook, a rebase) pointed git at; and git gets no machine key
 	cmd.Env = scrubGitEnv(os.Environ())
 	out, err := cmd.Output()
 	if err != nil {
@@ -211,12 +211,16 @@ func Project(dir string) (string, error) {
 	return root, nil
 }
 
+// scrubGitEnv is env without what git must not see: GIT_* (it would pick the
+// repository) and the machine key, which git does not need, whether as
+// SOCK_TOKEN or as a plugin option.
 func scrubGitEnv(env []string) []string {
 	out := make([]string, 0, len(env))
 	for _, kv := range env {
-		if !strings.HasPrefix(kv, "GIT_") {
-			out = append(out, kv)
+		if strings.HasPrefix(kv, "GIT_") || strings.HasPrefix(kv, "SOCK_TOKEN=") || strings.HasPrefix(kv, "CLAUDE_PLUGIN_OPTION_") {
+			continue
 		}
+		out = append(out, kv)
 	}
 	return out
 }
