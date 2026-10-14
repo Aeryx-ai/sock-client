@@ -1027,3 +1027,29 @@ func TestIsProjectPuppetName(t *testing.T) {
 		}
 	}
 }
+
+// review: a .swept that is not a regular file (a symlink) is replaced, never
+// written through
+func TestSweepEveryDoesNotWriteThroughASymlink(t *testing.T) {
+	f := newFake()
+	p := newProjects(t, f)
+	if err := p.prepare(); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(t.TempDir(), "target")
+	if err := os.WriteFile(target, []byte("keep"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, filepath.Join(p.Dir, ".swept")); err != nil {
+		t.Skip(err)
+	}
+	old := time.Now().Add(-2 * time.Hour)
+	_ = os.Chtimes(target, old, old)
+	p.SweepEvery(t.Context(), time.Hour)
+	if b, err := os.ReadFile(target); err != nil || string(b) != "keep" {
+		t.Fatalf("target %q: %v", b, err)
+	}
+	if info, err := os.Lstat(filepath.Join(p.Dir, ".swept")); err != nil || !info.Mode().IsRegular() {
+		t.Fatalf("stamp %v: %v", info, err)
+	}
+}

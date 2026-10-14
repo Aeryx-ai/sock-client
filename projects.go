@@ -484,19 +484,28 @@ func (p *Projects) Sweep(ctx context.Context) {
 // SweepEvery is Sweep at most once per every for this cache, whoever calls:
 // a removed repository's puppet need not go at once, and the hook resolves on
 // every send. The stamp is taken before sweeping, so concurrent callers do not
-// all sweep; a sweep cut short keeps its entries for the next turn. A stamp
-// from the future (a clock set back) is due.
+// all sweep; what a sweep cut short leaves (an erase the hub refused, an old
+// temporary file) waits up to every for the next one. A stamp from the future
+// (a clock set back) is due; one that is not a regular file is replaced, never
+// written through.
 func (p *Projects) SweepEvery(ctx context.Context, every time.Duration) {
 	if !filepath.IsAbs(p.Dir) {
 		return
 	}
+	// no cache directory yet: nothing to sweep
+	if _, err := os.Stat(p.Dir); err != nil || p.prepare() != nil {
+		return
+	}
 	stamp := filepath.Join(p.Dir, ".swept")
-	if info, err := os.Stat(stamp); err == nil {
-		if age := time.Since(info.ModTime()); age >= 0 && age < every {
+	if info, err := os.Lstat(stamp); err == nil {
+		if !info.Mode().IsRegular() {
+			if os.RemoveAll(stamp) != nil {
+				return
+			}
+		} else if age := time.Since(info.ModTime()); age >= 0 && age < every {
 			return
 		}
 	}
-	// no cache directory yet: nothing to sweep
 	if err := os.WriteFile(stamp, nil, 0o600); err != nil {
 		return
 	}
