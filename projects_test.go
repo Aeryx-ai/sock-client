@@ -790,3 +790,27 @@ func TestEnsureAdoptsThisKeysPuppetFromTheOldLayout(t *testing.T) {
 		}
 	})
 }
+
+// second review 1: without HOME (Windows, a bare launcher) the cache falls
+// back to USERPROFILE, and a cache dir that is still relative is refused
+// rather than written into the working tree
+func TestProjectsCacheIsNeverRelative(t *testing.T) {
+	cfg := Config{URL: "https://a.example", Token: "sock_mk_a_secret"}
+	profile := t.TempDir()
+	if d := ProjectsDir(func(k string) string { return map[string]string{"USERPROFILE": profile}[k] }, cfg); !strings.HasPrefix(d, profile+string(filepath.Separator)) {
+		t.Fatalf("dir %q", d)
+	}
+	cwd := t.TempDir()
+	t.Chdir(cwd)
+	dir := filepath.Join(t.TempDir(), "proj")
+	_ = os.Mkdir(dir, 0o755)
+	f := newFake()
+	p := &Projects{API: f, Dir: ProjectsDir(func(string) string { return "" }, cfg), Host: "mac"}
+	if _, err := p.Ensure(t.Context(), dir); err == nil || len(f.creates) != 0 {
+		t.Fatalf("ensure with a relative cache: %v, creates %v", err, f.creates)
+	}
+	p.Sweep(t.Context())
+	if ents, _ := os.ReadDir(cwd); len(ents) != 0 {
+		t.Fatalf("wrote into the working directory: %v", ents)
+	}
+}

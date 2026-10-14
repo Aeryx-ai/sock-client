@@ -1,6 +1,7 @@
 package client
 
 import (
+	"cmp"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -169,10 +170,13 @@ func ProjectsDir(getenv func(string) string, cfg Config) string {
 	return filepath.Join(projectsBase(getenv), hex.EncodeToString(sum[:])[:32])
 }
 
+// projectsBase is the cache's parent. Without XDG_STATE_HOME it is under the
+// home directory, HOME or (Windows) USERPROFILE; with neither it is relative,
+// and prepare refuses it.
 func projectsBase(getenv func(string) string) string {
 	state := getenv("XDG_STATE_HOME")
 	if state == "" {
-		state = filepath.Join(getenv("HOME"), ".local", "state")
+		state = filepath.Join(cmp.Or(getenv("HOME"), getenv("USERPROFILE")), ".local", "state")
 	}
 	return filepath.Join(state, "sock-integrations", "puppets")
 }
@@ -394,6 +398,9 @@ func (p *Projects) hashed(ctx context.Context, name string) (string, string, err
 // is gone only when its parent directory is there and it is not: an unmounted
 // volume is not a deleted repository.
 func (p *Projects) Sweep(ctx context.Context) {
+	if !filepath.IsAbs(p.Dir) {
+		return
+	}
 	ents, err := os.ReadDir(p.Dir)
 	if err != nil {
 		return
@@ -461,6 +468,10 @@ func repoGone(repo, dev string) bool {
 var deviceOf = statDevice
 
 func (p *Projects) prepare() error {
+	if !filepath.IsAbs(p.Dir) {
+		// a relative cache would land in the working tree, tokens and all
+		return errors.New("puppet cache: no home directory to keep it in (set HOME or XDG_STATE_HOME)")
+	}
 	if err := os.MkdirAll(p.Dir, 0o700); err != nil {
 		return fmt.Errorf("puppet cache: %w", err)
 	}
