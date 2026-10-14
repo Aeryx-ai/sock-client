@@ -11,7 +11,6 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"syscall"
 	"time"
 	"unicode"
 	"unicode/utf8"
@@ -410,28 +409,25 @@ func (p *Projects) lock(ctx context.Context, key string) (func(), error) {
 	if err := p.prepare(); err != nil {
 		return nil, err
 	}
-	f, err := os.OpenFile(filepath.Join(p.Dir, key+".lock"), os.O_CREATE|os.O_RDWR, 0o600)
-	if err != nil {
-		return nil, fmt.Errorf("puppet cache lock: %w", err)
-	}
+	path := filepath.Join(p.Dir, key+".lock")
 	for {
-		err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
+		unlock, err := tryLock(path)
 		if err == nil {
-			break
+			return unlock, nil
 		}
-		if !errors.Is(err, syscall.EWOULDBLOCK) {
-			_ = f.Close()
+		if !errors.Is(err, errLockBusy) {
 			return nil, fmt.Errorf("puppet cache lock: %w", err)
 		}
 		select {
 		case <-ctx.Done():
-			_ = f.Close()
 			return nil, fmt.Errorf("puppet cache is busy: %w", ctx.Err())
 		case <-time.After(25 * time.Millisecond):
 		}
 	}
-	return func() { _ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN); _ = f.Close() }, nil
 }
+
+// errLockBusy is tryLock's answer when another process holds the lock.
+var errLockBusy = errors.New("held by another process")
 
 func (p *Projects) cached(key string) string {
 	b, err := os.ReadFile(filepath.Join(p.Dir, key))

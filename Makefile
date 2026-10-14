@@ -1,5 +1,5 @@
 .DEFAULT_GOAL := build
-.PHONY: build test install redeploy check lint fmt vet
+.PHONY: build test install redeploy check lint fmt vet cross
 
 build:
 	go build ./...
@@ -22,4 +22,8 @@ fmt:
 vet:
 	go vet ./...
 
-check: fmt vet lint test
+# cross vets every platform sock ships to, so a unix-only call fails here
+cross:
+	@for os in darwin linux windows; do GOOS=$$os go vet ./... || exit 1; done
+
+check: fmt vet cross lint test
