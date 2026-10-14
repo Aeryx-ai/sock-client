@@ -695,3 +695,45 @@ func (f *getMeFake) GetMe(_ context.Context, r *connect.Request[sockv1.GetMeRequ
 	}
 	return connect.NewResponse(&sockv1.GetMeResponse{}), nil
 }
+
+// security review 4: a repository at a volume's root looks gone when the
+// volume is unmounted (its parent, /Volumes, is there and holds other
+// volumes); it sat on another device than its parent, so it is not gone
+func TestSweepKeepsARepositoryAtAVolumeRoot(t *testing.T) {
+	f := newFake()
+	p := newProjects(t, f)
+	volumes := t.TempDir()
+	repo := filepath.Join(volumes, "X")
+	_ = os.Mkdir(repo, 0o755)
+	_ = os.Mkdir(filepath.Join(volumes, "Other"), 0o755)
+	resolved, _ := filepath.EvalSymlinks(repo)
+	old := deviceOf
+	t.Cleanup(func() { deviceOf = old })
+	deviceOf = func(path string) (uint64, bool) {
+		if path == resolved {
+			return 2, true
+		}
+		return 1, true
+	}
+	if _, err := p.Ensure(t.Context(), repo); err != nil {
+		t.Fatal(err)
+	}
+	_ = os.RemoveAll(repo) // unmounted
+	p.Sweep(t.Context())
+	if len(f.erased) != 0 {
+		t.Fatalf("erased %v", f.erased)
+	}
+	// a repository on its parent's device that vanished is gone
+	deviceOf = func(string) (uint64, bool) { return 1, true }
+	plain := filepath.Join(volumes, "Other", "proj")
+	_ = os.Mkdir(plain, 0o755)
+	_ = os.WriteFile(filepath.Join(volumes, "Other", "keep"), nil, 0o600)
+	if _, err := p.Ensure(t.Context(), plain); err != nil {
+		t.Fatal(err)
+	}
+	_ = os.RemoveAll(plain)
+	p.Sweep(t.Context())
+	if len(f.erased) != 1 {
+		t.Fatalf("erased %v", f.erased)
+	}
+}

@@ -379,7 +379,7 @@ func (p *Projects) Sweep(ctx context.Context) {
 		if !ok || ctx.Err() != nil {
 			continue
 		}
-		if repo, id := p.meta(key); repo == "" || id == "" || !repoGone(repo) {
+		if repo, id, dev := p.meta(key); repo == "" || id == "" || !repoGone(repo, dev) {
 			continue
 		}
 		unlock, err := p.lock(ctx, key)
@@ -387,8 +387,8 @@ func (p *Projects) Sweep(ctx context.Context) {
 			continue
 		}
 		// the entry may have changed while the lock was awaited
-		repo, id := p.meta(key)
-		if repo == "" || id == "" || !repoGone(repo) {
+		repo, id, dev := p.meta(key)
+		if repo == "" || id == "" || !repoGone(repo, dev) {
 			unlock()
 			continue
 		}
@@ -405,16 +405,29 @@ func (p *Projects) Sweep(ctx context.Context) {
 }
 
 // repoGone says a repository was removed: it does not exist while its parent
-// directory exists and holds something. A missing parent is an unmounted volume
-// (macOS), an empty one the mount point of an unmounted volume (Linux). Any
-// other error, permission included, is not "gone".
-func repoGone(repo string) bool {
+// directory exists, holds something and is on the device the repository was
+// on (dev, recorded when the puppet was made; empty when unknown). A missing
+// parent is an unmounted volume (macOS), an empty one the mount point of an
+// unmounted volume (Linux), a parent on another device the volume a repository
+// at a volume's root (/Volumes/X) was on. Any other error, permission
+// included, is not "gone".
+func repoGone(repo, dev string) bool {
 	if _, err := os.Stat(repo); !errors.Is(err, os.ErrNotExist) {
 		return false
 	}
-	ents, err := os.ReadDir(filepath.Dir(repo))
-	return err == nil && len(ents) > 0
+	parent := filepath.Dir(repo)
+	if ents, err := os.ReadDir(parent); err != nil || len(ents) == 0 {
+		return false
+	}
+	if dev == "" {
+		return true
+	}
+	pd, ok := deviceOf(parent)
+	return ok && strconv.FormatUint(pd, 10) == dev
 }
+
+// deviceOf is statDevice; tests stand in for a mounted volume.
+var deviceOf = statDevice
 
 func (p *Projects) prepare() error {
 	if err := os.MkdirAll(p.Dir, 0o700); err != nil {
@@ -459,21 +472,33 @@ func (p *Projects) cached(key string) string {
 	return tok
 }
 
-func (p *Projects) meta(key string) (repo, id string) {
+// meta is an entry's repository, puppet id and the repository's device id
+// (empty when unknown): one per line, the path quoted.
+func (p *Projects) meta(key string) (repo, id, dev string) {
 	b, err := os.ReadFile(filepath.Join(p.Dir, key+".meta"))
 	if err != nil {
-		return "", ""
+		return "", "", ""
 	}
-	quoted, id, _ := strings.Cut(strings.TrimRight(string(b), "\n"), "\n")
-	repo, err = strconv.Unquote(quoted)
+	lines := strings.Split(strings.TrimRight(string(b), "\n"), "\n")
+	if len(lines) < 2 {
+		return "", "", ""
+	}
+	repo, err = strconv.Unquote(lines[0])
 	if err != nil {
-		return "", ""
+		return "", "", ""
 	}
-	return repo, id
+	if len(lines) > 2 {
+		dev = lines[2]
+	}
+	return repo, lines[1], dev
 }
 
 func (p *Projects) store(key, repo, id, tok string) error {
-	if err := writeAtomic(filepath.Join(p.Dir, key+".meta"), []byte(strconv.Quote(repo)+"\n"+id+"\n")); err != nil {
+	dev := ""
+	if d, ok := deviceOf(repo); ok {
+		dev = strconv.FormatUint(d, 10)
+	}
+	if err := writeAtomic(filepath.Join(p.Dir, key+".meta"), []byte(strconv.Quote(repo)+"\n"+id+"\n"+dev+"\n")); err != nil {
 		return err
 	}
 	return writeAtomic(filepath.Join(p.Dir, key), []byte(tok+"\n"))
