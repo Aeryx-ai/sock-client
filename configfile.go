@@ -43,9 +43,10 @@ func DefaultConfigPath(getenv func(string) string) (string, error) {
 // refused, naming the file and never its contents.
 //
 // This reads the file only. How its keys combine with flags and the
-// environment belongs to each caller: sock-cli takes flag, then env, then
-// file per field; sock-mcp takes everything from the environment or
-// everything from the file, so a file token never goes to an ambient URL.
+// environment belongs to each caller. Both send a file token only to the
+// file's server: sock-mcp takes everything from the environment or
+// everything from the file; sock-cli refuses an ambient URL or gate that
+// differs from the file's when the token is the file's.
 func LoadFileConfig(path string) (FileConfig, error) {
 	var f FileConfig
 	if path == "" {
