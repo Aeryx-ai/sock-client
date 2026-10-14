@@ -12,15 +12,16 @@ func TestScrubSecretsDropsOnlyTheSecrets(t *testing.T) {
 	}
 }
 
-func TestTerminalSafeEscapesWhatATerminalWouldRun(t *testing.T) {
+func TestTerminalSafeReplacesWhatATerminalWouldRun(t *testing.T) {
+	const x = "\ufffd"
 	for in, want := range map[string]string{
-		"hi\x1b]52;c;cGF5bG9hZA==\x07there":   `hi\x1b]52;c;cGF5bG9hZA==\x07there`, // OSC 52 clipboard write
-		"a\x1b[2J\x1b[Hb":                     `a\x1b[2J\x1b[Hb`,                   // CSI erase and home
-		"x\u009b31my":                         `x\u009b31my`,                       // C1 CSI
-		"raw\x9b2Jz":                          `raw\x9b2Jz`,                        // 8-bit CSI as a bare byte
-		"del\x7f\r":                           `del\x7f\x0d`,
-		"evil\u202etxt.exe\u2066\u200f\u061c": `evil\u202etxt.exe\u2066\u200f\u061c`,
-		"line one\n\tline two ünï":            "line one\n\tline two ünï",
+		"hi\x1b]52;c;cGF5bG9hZA==\x07there": "hi" + x + "]52;c;cGF5bG9hZA==" + x + "there", // OSC 52 clipboard write
+		"a\x1b[2J\x1b[Hb":                   "a" + x + "[2J" + x + "[Hb",                   // CSI erase and home
+		"x\u009b31my":                       "x" + x + "31my",                              // C1 CSI
+		"raw\x9b2Jz":                        "raw" + x + "2Jz",                             // 8-bit CSI as a bare byte
+		"del\x7f\r":                         "del" + x + x,
+		"evil\u202etxt.exe\u2066\u200f\u061c\u202a\u2069\u200e": "evil" + x + "txt.exe" + x + x + x + x + x + x,
+		"line one\n\tline two \u00fcn\u00ef":                    "line one\n\tline two \u00fcn\u00ef",
 	} {
 		if got := TerminalSafe(in); got != want {
 			t.Errorf("TerminalSafe(%q) = %q, want %q", in, got, want)

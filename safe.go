@@ -1,8 +1,8 @@
 package client
 
 import (
-	"fmt"
 	"strings"
+	"unicode"
 	"unicode/utf8"
 )
 
@@ -25,27 +25,19 @@ func isSecretName(kv string) bool {
 	return name == "SOCK_TOKEN" || name == "SOCK_ACCESS_GATE" || strings.HasPrefix(name, "CLAUDE_PLUGIN_OPTION_")
 }
 
-// TerminalSafe renders s so a terminal shows it rather than runs it: C0
-// controls but newline and tab, DEL, C1 controls, bidi controls and bytes
-// that are not UTF-8 come out as visible \xNN or \uNNNN escapes.
+// TerminalSafe makes s safe to print to a terminal: control characters (C0
+// but newline and tab, DEL, C1), bidi controls and invalid UTF-8 become
+// U+FFFD, so what another account wrote is shown, never run or reordered.
+// JSON output needs none of this: its encoder escapes them already.
 func TerminalSafe(s string) string {
-	var b strings.Builder
-	for i := 0; i < len(s); {
-		r, size := utf8.DecodeRuneInString(s[i:])
+	return strings.Map(func(r rune) rune {
 		switch {
-		case r == utf8.RuneError && size == 1:
-			fmt.Fprintf(&b, `\x%02x`, s[i])
 		case r == '\n' || r == '\t':
-			b.WriteRune(r)
-		case r < 0x20 || r == 0x7f:
-			fmt.Fprintf(&b, `\x%02x`, r)
-		case r >= 0x80 && r <= 0x9f, r >= 0x202a && r <= 0x202e, r >= 0x2066 && r <= 0x2069,
+			return r
+		case unicode.IsControl(r), r >= 0x202a && r <= 0x202e, r >= 0x2066 && r <= 0x2069,
 			r == 0x200e, r == 0x200f, r == 0x061c:
-			fmt.Fprintf(&b, `\u%04x`, r)
-		default:
-			b.WriteString(s[i : i+size])
+			return utf8.RuneError
 		}
-		i += size
-	}
-	return b.String()
+		return r
+	}, s)
 }
