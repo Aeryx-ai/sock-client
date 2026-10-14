@@ -39,8 +39,8 @@ func Validate(c Config) error {
 	if strings.ContainsFunc(c.Token, unicode.IsSpace) {
 		return errors.New("token contains whitespace; check for a stray line break or a second value")
 	}
-	if !strings.HasPrefix(c.Token, "sock_pt_") && !strings.HasPrefix(c.Token, "sock_st_") {
-		return errors.New("token must start with sock_pt_ or sock_st_")
+	if TokenKind(c.Token) == KindUnknown {
+		return errors.New("token must start with sock_pt_, sock_st_ or sock_mk_")
 	}
 	u, err := url.Parse(c.URL)
 	if err != nil {
