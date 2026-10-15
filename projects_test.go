@@ -1053,3 +1053,25 @@ func TestSweepEveryDoesNotWriteThroughASymlink(t *testing.T) {
 		t.Fatalf("stamp %v: %v", info, err)
 	}
 }
+
+// Cached answers from the cache alone: a listener may only act for puppets
+// that already exist, so it never mints one for a directory that never
+// messaged anyone.
+func TestCachedNeverMints(t *testing.T) {
+	f := newFake()
+	p := newProjects(t, f)
+	dir := filepath.Join(t.TempDir(), "myproj")
+	if err := os.Mkdir(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if tok, err := p.Cached(t.Context(), dir); err != nil || tok != "" || len(f.creates) != 0 {
+		t.Fatalf("before ensure: %q %v, creates %v", tok, err, f.creates)
+	}
+	want, err := p.Ensure(t.Context(), dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tok, err := p.Cached(t.Context(), dir); err != nil || tok != want {
+		t.Fatalf("after ensure: %q %v", tok, err)
+	}
+}

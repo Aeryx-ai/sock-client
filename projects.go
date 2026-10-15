@@ -684,3 +684,13 @@ func IsProjectPuppetName(name string) bool {
 	host := name[i+len(" on "):]
 	return strings.TrimSpace(name[:i]) != "" && host != "" && !strings.ContainsAny(host, " .")
 }
+
+// Cached is the cached puppet token of dir's project, or "" when none is
+// cached. It never mints, asks the hub or sweeps.
+func (p *Projects) Cached(ctx context.Context, dir string) (string, error) {
+	repo, err := Project(ctx, dir)
+	if err != nil {
+		return "", fmt.Errorf("project of %s: %w", dir, err)
+	}
+	return p.cached(keyOf(repo)), nil
+}
