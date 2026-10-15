@@ -47,7 +47,7 @@ const sweepInterval = 6 * time.Hour
 // ErrNoPuppetCredential means no source holds a credential a puppet may use:
 // SOCK_TOKEN is unset and the config file has neither machine_key nor
 // puppet_token. The file's token, the human's session, never counts.
-var ErrNoPuppetCredential = errors.New("no token: set SOCK_TOKEN")
+var ErrNoPuppetCredential = errors.New("no sock credential: run `sock login` once")
 
 // errNoProject is the failure when the work directory names no project and
 // the config file has no puppet_token to fall back to.
@@ -76,6 +76,22 @@ func LoadPuppetConfig(o PuppetOptions) (Config, error) {
 	c := Config{URL: DefaultURL, Token: strings.TrimSpace(getenv("SOCK_TOKEN")), AccessGate: strings.TrimSpace(getenv("SOCK_ACCESS_GATE"))}
 	if v := getenv("SOCK_URL"); v != "" {
 		c.URL = v
+	}
+	if TokenKind(c.Token) == KindPuppet {
+		// A single-puppet token left in the environment (the plugin's old
+		// sock_token option) must not pin every project to one puppet: the
+		// file's machine key, when it has one, makes each project its own.
+		// A file that cannot be read changes nothing: this path never needed it.
+		if fc, path, err := o.fileConfig(); err == nil {
+			if mk := strings.TrimSpace(fc.MachineKey); TokenKind(mk) == KindMachineKey {
+				o.logf("SOCK_TOKEN holds a puppet token, but %s has a machine key, so each project gets its own puppet: clear the stale sock_token", path)
+				c = fileServer(fc, mk)
+				if err := Validate(c); err != nil {
+					return Config{}, err
+				}
+				return c, nil
+			}
+		}
 	}
 	if c.Token == "" {
 		fc, path, err := o.fileConfig()

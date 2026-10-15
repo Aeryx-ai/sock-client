@@ -44,17 +44,21 @@ func TestLoadPuppetConfigPrecedence(t *testing.T) {
 		tok, url  string
 		noneFound bool
 	}{
-		"env wins":                   {env: map[string]string{"SOCK_TOKEN": "sock_pt_env_secret"}, body: all, tok: "sock_pt_env_secret", url: DefaultURL},
-		"machine key over puppet":    {body: all, tok: "sock_mk_file_secret", url: "https://file.example"},
-		"puppet token":               {body: "token = \"sock_st_human_secret\"\npuppet_token = \"sock_pt_file_secret\"\n", tok: "sock_pt_file_secret", url: DefaultURL},
-		"never the login token":      {body: "token = \"sock_st_human_secret\"\n", noneFound: true},
-		"no file":                    {noneFound: true},
-		"file token ignores env url": {env: map[string]string{"SOCK_URL": "https://env.example"}, body: "puppet_token = \"sock_pt_file_secret\"\n", tok: "sock_pt_file_secret", url: DefaultURL},
+		"env machine key wins": {env: map[string]string{"SOCK_TOKEN": "sock_mk_env_secret"}, body: all, tok: "sock_mk_env_secret", url: DefaultURL},
+		"env puppet token wins when the file has no machine key":   {env: map[string]string{"SOCK_TOKEN": "sock_pt_env_secret"}, body: "puppet_token = \"sock_pt_file_secret\"\n", tok: "sock_pt_env_secret", url: DefaultURL},
+		"a stale env puppet token loses to the file's machine key": {env: map[string]string{"SOCK_TOKEN": "sock_pt_env_secret"}, body: all, tok: "sock_mk_file_secret", url: "https://file.example"},
+		"an empty env token is unset":                              {env: map[string]string{"SOCK_TOKEN": ""}, body: all, tok: "sock_mk_file_secret", url: "https://file.example"},
+		"a blank env token is unset":                               {env: map[string]string{"SOCK_TOKEN": " \t\n"}, body: all, tok: "sock_mk_file_secret", url: "https://file.example"},
+		"machine key over puppet":                                  {body: all, tok: "sock_mk_file_secret", url: "https://file.example"},
+		"puppet token":                                             {body: "token = \"sock_st_human_secret\"\npuppet_token = \"sock_pt_file_secret\"\n", tok: "sock_pt_file_secret", url: DefaultURL},
+		"never the login token":                                    {body: "token = \"sock_st_human_secret\"\n", noneFound: true},
+		"no file":                                                  {noneFound: true},
+		"file token ignores env url":                               {env: map[string]string{"SOCK_URL": "https://env.example"}, body: "puppet_token = \"sock_pt_file_secret\"\n", tok: "sock_pt_file_secret", url: DefaultURL},
 	} {
 		t.Run(name, func(t *testing.T) {
 			c, err := LoadPuppetConfig(puppetEnv(t, tc.env, tc.body))
 			if tc.noneFound {
-				if !errors.Is(err, ErrNoPuppetCredential) || err.Error() != "no token: set SOCK_TOKEN" {
+				if !errors.Is(err, ErrNoPuppetCredential) || err.Error() != "no sock credential: run `sock login` once" {
 					t.Fatalf("got %+v, %v", c, err)
 				}
 				return
@@ -237,5 +241,19 @@ func TestResolvePuppetTrustCacheSkipsTheTokenCheck(t *testing.T) {
 	}
 	if f.getMes != 1 {
 		t.Fatalf("checked a trusted cached token: %d GetMe", f.getMes)
+	}
+}
+
+// The plugin passes ${user_config.sock_token}, which may still hold the old
+// single-puppet token: the machine key wins, and one line says why.
+func TestStaleEnvPuppetTokenIsSaidOutLoud(t *testing.T) {
+	o := puppetEnv(t, map[string]string{"SOCK_TOKEN": "sock_pt_env_secret"}, "machine_key = \"sock_mk_file_secret\"\n")
+	var lines []string
+	o.Log = func(f string, a ...any) { lines = append(lines, fmt.Sprintf(f, a...)) }
+	if c, err := LoadPuppetConfig(o); err != nil || c.Token != "sock_mk_file_secret" {
+		t.Fatalf("%+v %v", c, err)
+	}
+	if len(lines) != 1 || !strings.Contains(lines[0], "SOCK_TOKEN") || strings.Contains(lines[0], "secret") {
+		t.Fatalf("log lines %q", lines)
 	}
 }
