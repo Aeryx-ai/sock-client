@@ -2,6 +2,8 @@ package client
 
 import (
 	"context"
+	"crypto/tls"
+	"net"
 	"net/http"
 	"net/url"
 	"time"
@@ -53,7 +55,7 @@ func New(cfg Config, userAgent string, opts ...Option) Clients {
 	for _, opt := range opts {
 		opt(&o)
 	}
-	rt := http.DefaultTransport
+	rt := http.RoundTripper(newTransport(defaultLiveness))
 	if o.wrap != nil {
 		rt = o.wrap(rt)
 	}
@@ -112,4 +114,39 @@ func Call[T any](ctx context.Context, r Retrier, fn func(context.Context) (T, er
 		return err
 	})
 	return out, Describe(err)
+}
+
+// liveness is how fast a dead connection is noticed. A stream that goes quiet
+// (a NAT that forgot the flow, a laptop that slept) sends nothing, so without
+// these only the 60s silence watchdog of the caller would catch it.
+type liveness struct {
+	// ping and pingTimeout: after ping of silence on an HTTP/2 connection the
+	// transport sends a health-check ping and closes the connection if it is
+	// not answered within pingTimeout.
+	ping, pingTimeout time.Duration
+	// tcpIdle, tcpInterval and tcpCount are the TCP keep-alive probes, which
+	// cover plain HTTP/1.1 (a loopback hub) as well.
+	tcpIdle, tcpInterval time.Duration
+	tcpCount             int
+}
+
+// defaultLiveness detects a dead connection in about 8s over HTTP/2 and about
+// 11s over TCP keep-alive.
+var defaultLiveness = liveness{
+	ping: 5 * time.Second, pingTimeout: 3 * time.Second,
+	tcpIdle: 5 * time.Second, tcpInterval: 2 * time.Second, tcpCount: 3,
+}
+
+// newTransport is the standard transport with l's health checks.
+func newTransport(l liveness) *http.Transport {
+	tr := http.DefaultTransport.(*http.Transport).Clone()
+	tr.HTTP2 = &http.HTTP2Config{SendPingTimeout: l.ping, PingTimeout: l.pingTimeout}
+	tr.DialContext = (&net.Dialer{
+		Timeout:         30 * time.Second,
+		KeepAliveConfig: net.KeepAliveConfig{Enable: true, Idle: l.tcpIdle, Interval: l.tcpInterval, Count: l.tcpCount},
+	}).DialContext
+	if tr.TLSClientConfig == nil {
+		tr.TLSClientConfig = &tls.Config{MinVersion: tls.VersionTLS12}
+	}
+	return tr
 }
