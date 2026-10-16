@@ -173,6 +173,35 @@ func (p *SessionPuppets) Unarchive(ctx context.Context, s Session) error {
 	return nil
 }
 
+// SetArchived archives or unarchives the session's puppet when that is not
+// already its state. The state is a fact kept beside the token (the file
+// <key>.archived exists while archived), written only after the hub took the
+// call, so a restart does not repeat it and a failed call is tried again.
+func (p *SessionPuppets) SetArchived(ctx context.Context, s Session, archived bool) error {
+	if p.Cached(s) == "" {
+		return nil
+	}
+	fact := filepath.Join(p.cache().Dir, s.key()+".archived")
+	_, err := os.Stat(fact)
+	if archived == (err == nil) {
+		return nil
+	}
+	call := p.Unarchive
+	if archived {
+		call = p.Archive
+	}
+	if err := call(ctx, s); err != nil {
+		return err
+	}
+	if archived {
+		return writeAtomic(fact, nil)
+	}
+	if err := os.Remove(fact); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	return nil
+}
+
 // Sessions lists the sessions with a cached puppet.
 func (p *SessionPuppets) Sessions() []Session {
 	ents, err := os.ReadDir(p.cache().Dir)

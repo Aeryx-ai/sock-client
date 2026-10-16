@@ -47,7 +47,8 @@ func TokenKind(token string) TokenKindName {
 	return KindUnknown
 }
 
-// PuppetInfo is a puppet the machine key may see: one it created.
+// PuppetInfo is a puppet the machine key may see: one it created. Name is the
+// name it was created with.
 type PuppetInfo struct{ ID, Name string }
 
 // PuppetAPI is what a machine key may call (ADR 10, ADR 27): the RPCs of its
@@ -98,7 +99,9 @@ func (a *connectPuppets) ListPuppets(ctx context.Context) ([]PuppetInfo, error) 
 	}
 	var out []PuppetInfo
 	for _, p := range res.GetPuppets() {
-		out = append(out, PuppetInfo{ID: p.GetPuppet().GetId(), Name: p.GetPuppet().GetDisplayName()})
+		// the name it was made with: unique and fixed, unlike the display
+		// name, which a session puppet's own token changes
+		out = append(out, PuppetInfo{ID: p.GetPuppet().GetId(), Name: p.GetPuppet().GetPuppet().GetName()})
 	}
 	return out, nil
 }

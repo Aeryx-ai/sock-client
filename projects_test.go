@@ -33,7 +33,7 @@ type fakePuppets struct {
 	archives []string // "archive <id>" or "unarchive <id>", in order
 	// failErase, when set, answers ErasePuppet with it; failList ListPuppets;
 	// failCreate CreatePuppet
-	failErase, failList, failCreate, failMint error
+	failErase, failList, failCreate, failMint, failArchive error
 	// takenBy: names that exist and are not ours
 	taken map[string]bool
 }
@@ -1085,6 +1085,9 @@ func TestCachedNeverMints(t *testing.T) {
 func (f *fakePuppets) ArchivePuppet(_ context.Context, id string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.failArchive != nil {
+		return f.failArchive
+	}
 	f.archives = append(f.archives, "archive "+id)
 	return nil
 }
@@ -1147,5 +1150,24 @@ func TestArchiveWithTheKeyRenameWithThePuppet(t *testing.T) {
 	}
 	if strings.Join(f.renames, ",") != "Bearer sock_pt_d_s s on mac" {
 		t.Fatalf("renames %v", f.renames)
+	}
+}
+
+func (f *identityFake) ListPuppets(context.Context, *connect.Request[sockv1.ListPuppetsRequest]) (*connect.Response[sockv1.ListPuppetsResponse], error) {
+	p := &sockv1.Account{Id: "p1", DisplayName: "renamed by a thread title", Kind: &sockv1.Account_Puppet{Puppet: &sockv1.Puppet{Name: "proj-1a2b3c4d on mac"}}}
+	return connect.NewResponse(&sockv1.ListPuppetsResponse{Puppets: []*sockv1.PuppetWithDevices{{Puppet: p}}}), nil
+}
+
+// A puppet is matched on the name it was made with, which nothing can change;
+// its display name is a session's to set.
+func TestListPuppetsReportsTheCreationName(t *testing.T) {
+	f := &identityFake{}
+	mux := http.NewServeMux()
+	mux.Handle(sockv1connect.NewIdentityServiceHandler(f))
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	list, err := NewPuppetAPI(New(Config{URL: srv.URL, Token: "sock_mk_dev_secret"}, "test"), DefaultRetrier()).ListPuppets(t.Context())
+	if err != nil || len(list) != 1 || list[0].Name != "proj-1a2b3c4d on mac" {
+		t.Fatalf("%+v %v", list, err)
 	}
 }

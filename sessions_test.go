@@ -190,3 +190,42 @@ func TestSessionEnsureReplacesADeadToken(t *testing.T) {
 		t.Fatalf("%v: creates %v", err, f.creates)
 	}
 }
+
+// The archive state is kept beside the token: a call goes out only when it
+// changes, across restarts too.
+func TestSessionSetArchivedCallsOnlyOnAChange(t *testing.T) {
+	f := newFake()
+	p, _ := newSessions(t, f)
+	if _, err := p.Ensure(t.Context(), codexS1, "s"); err != nil {
+		t.Fatal(err)
+	}
+	id := f.firstID()
+	for _, want := range []bool{true, true, false, false, true} {
+		if err := p.SetArchived(t.Context(), codexS1, want); err != nil {
+			t.Fatal(err)
+		}
+	}
+	restarted := &SessionPuppets{API: f, Dir: p.Dir, Host: "mac"}
+	if err := restarted.SetArchived(t.Context(), codexS1, true); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(f.archives, []string{"archive " + id, "unarchive " + id, "archive " + id}) {
+		t.Fatalf("archives %v", f.archives)
+	}
+}
+
+func TestSessionSetArchivedKeepsTheStateWhenTheCallFails(t *testing.T) {
+	f := newFake()
+	p, _ := newSessions(t, f)
+	if _, err := p.Ensure(t.Context(), codexS1, "s"); err != nil {
+		t.Fatal(err)
+	}
+	f.failArchive = connect.NewError(connect.CodeUnimplemented, errors.New("not yet"))
+	if err := p.SetArchived(t.Context(), codexS1, true); connect.CodeOf(err) != connect.CodeUnimplemented {
+		t.Fatalf("err %v", err)
+	}
+	f.failArchive = nil
+	if err := p.SetArchived(t.Context(), codexS1, true); err != nil || len(f.archives) != 1 {
+		t.Fatalf("the failed archive was taken as done: %v %v", f.archives, err)
+	}
+}
