@@ -50,13 +50,15 @@ func TokenKind(token string) TokenKindName {
 // PuppetInfo is a puppet the machine key may see: one it created.
 type PuppetInfo struct{ ID, Name string }
 
-// PuppetAPI is what a machine key may call (ADR 10): the four RPCs of its
-// caller class, reduced to what project puppets need.
+// PuppetAPI is what a machine key may call (ADR 10, ADR 27): the RPCs of its
+// caller class, reduced to what project and session puppets need.
 type PuppetAPI interface {
 	CreatePuppet(ctx context.Context, name, tokenLabel string) (id, token string, err error)
 	ListPuppets(ctx context.Context) ([]PuppetInfo, error)
 	MintPuppetToken(ctx context.Context, puppetID, label string) (token string, err error)
 	ErasePuppet(ctx context.Context, puppetID string) error
+	ArchivePuppet(ctx context.Context, puppetID string) error
+	UnarchivePuppet(ctx context.Context, puppetID string) error
 }
 
 // NewPuppetAPI wraps an Identity client authenticated with a machine key.
@@ -115,6 +117,28 @@ func (a *connectPuppets) MintPuppetToken(ctx context.Context, id, label string) 
 	return res.GetToken(), nil
 }
 
+func (a *connectPuppets) ArchivePuppet(ctx context.Context, id string) error {
+	_, err := Call(ctx, a.r, func(ctx context.Context) (*sockv1.ArchivePuppetResponse, error) {
+		out, err := a.c.Identity.ArchivePuppet(ctx, connect.NewRequest(&sockv1.ArchivePuppetRequest{PuppetId: id}))
+		if err != nil {
+			return nil, err
+		}
+		return out.Msg, nil
+	})
+	return err
+}
+
+func (a *connectPuppets) UnarchivePuppet(ctx context.Context, id string) error {
+	_, err := Call(ctx, a.r, func(ctx context.Context) (*sockv1.UnarchivePuppetResponse, error) {
+		out, err := a.c.Identity.UnarchivePuppet(ctx, connect.NewRequest(&sockv1.UnarchivePuppetRequest{PuppetId: id}))
+		if err != nil {
+			return nil, err
+		}
+		return out.Msg, nil
+	})
+	return err
+}
+
 func (a *connectPuppets) ErasePuppet(ctx context.Context, id string) error {
 	_, err := Call(ctx, a.r, func(ctx context.Context) (*sockv1.ErasePuppetResponse, error) {
 		out, err := a.c.Identity.ErasePuppet(ctx, connect.NewRequest(&sockv1.ErasePuppetRequest{PuppetId: id}))
@@ -154,6 +178,19 @@ func NewTokenCheck(cfg Config, userAgent string) func(context.Context, string) e
 		c.Token = token
 		_, err := Call(ctx, Retrier{}, func(ctx context.Context) (*connect.Response[sockv1.GetMeResponse], error) {
 			return New(c, userAgent).Identity.GetMe(ctx, connect.NewRequest(&sockv1.GetMeRequest{}))
+		})
+		return err
+	}
+}
+
+// NewRename is a SessionPuppets.Rename that sets a puppet's display name with
+// the puppet's own token (UpdateDisplayName, self) on cfg's server.
+func NewRename(cfg Config, userAgent string) func(context.Context, string, string) error {
+	return func(ctx context.Context, token, name string) error {
+		c := cfg
+		c.Token = token
+		_, err := Call(ctx, DefaultRetrier(), func(ctx context.Context) (*connect.Response[sockv1.UpdateDisplayNameResponse], error) {
+			return New(c, userAgent).Identity.UpdateDisplayName(ctx, connect.NewRequest(&sockv1.UpdateDisplayNameRequest{DisplayName: name}))
 		})
 		return err
 	}

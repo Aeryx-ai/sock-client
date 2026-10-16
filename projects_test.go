@@ -24,12 +24,13 @@ import (
 
 // fakePuppets is the machine key's view of the hub.
 type fakePuppets struct {
-	mu      sync.Mutex
-	next    int
-	puppets map[string]string // id -> name
-	creates []string          // names asked for, in order
-	mints   []string          // puppet ids a token was minted for
-	erased  []string
+	mu       sync.Mutex
+	next     int
+	puppets  map[string]string // id -> name
+	creates  []string          // names asked for, in order
+	mints    []string          // puppet ids a token was minted for
+	erased   []string
+	archives []string // "archive <id>" or "unarchive <id>", in order
 	// failErase, when set, answers ErasePuppet with it; failList ListPuppets;
 	// failCreate CreatePuppet
 	failErase, failList, failCreate error
@@ -378,10 +379,12 @@ func TestValidateAcceptsAMachineKey(t *testing.T) {
 
 type identityFake struct {
 	sockv1connect.UnimplementedIdentityServiceHandler
-	auth   []string
-	create *sockv1.CreatePuppetRequest
-	erased []string
-	getMes int
+	auth     []string
+	create   *sockv1.CreatePuppetRequest
+	erased   []string
+	getMes   int
+	archived []string
+	renames  []string
 }
 
 func (f *identityFake) GetMe(_ context.Context, r *connect.Request[sockv1.GetMeRequest]) (*connect.Response[sockv1.GetMeResponse], error) {
@@ -1073,5 +1076,73 @@ func TestCachedNeverMints(t *testing.T) {
 	}
 	if tok, err := p.Cached(t.Context(), dir); err != nil || tok != want {
 		t.Fatalf("after ensure: %q %v", tok, err)
+	}
+}
+
+func (f *fakePuppets) ArchivePuppet(_ context.Context, id string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.archives = append(f.archives, "archive "+id)
+	return nil
+}
+
+func (f *fakePuppets) UnarchivePuppet(_ context.Context, id string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.archives = append(f.archives, "unarchive "+id)
+	return nil
+}
+
+// firstID is the id of the only puppet made.
+func (f *fakePuppets) firstID() string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for id := range f.puppets {
+		return id
+	}
+	return ""
+}
+
+func (f *identityFake) ArchivePuppet(_ context.Context, r *connect.Request[sockv1.ArchivePuppetRequest]) (*connect.Response[sockv1.ArchivePuppetResponse], error) {
+	f.auth = append(f.auth, r.Header().Get("Authorization"))
+	f.archived = append(f.archived, "archive "+r.Msg.GetPuppetId())
+	return connect.NewResponse(&sockv1.ArchivePuppetResponse{}), nil
+}
+
+func (f *identityFake) UnarchivePuppet(_ context.Context, r *connect.Request[sockv1.UnarchivePuppetRequest]) (*connect.Response[sockv1.UnarchivePuppetResponse], error) {
+	f.auth = append(f.auth, r.Header().Get("Authorization"))
+	f.archived = append(f.archived, "unarchive "+r.Msg.GetPuppetId())
+	return connect.NewResponse(&sockv1.UnarchivePuppetResponse{}), nil
+}
+
+func (f *identityFake) UpdateDisplayName(_ context.Context, r *connect.Request[sockv1.UpdateDisplayNameRequest]) (*connect.Response[sockv1.UpdateDisplayNameResponse], error) {
+	f.renames = append(f.renames, r.Header().Get("Authorization")+" "+r.Msg.GetDisplayName())
+	return connect.NewResponse(&sockv1.UpdateDisplayNameResponse{}), nil
+}
+
+// ADR 27: the machine key archives; the puppet renames itself with its own
+// token.
+func TestArchiveWithTheKeyRenameWithThePuppet(t *testing.T) {
+	f := &identityFake{}
+	mux := http.NewServeMux()
+	mux.Handle(sockv1connect.NewIdentityServiceHandler(f))
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	cfg := Config{URL: srv.URL, Token: "sock_mk_dev_secret"}
+	api := NewPuppetAPI(New(cfg, "test"), DefaultRetrier())
+	if err := api.ArchivePuppet(t.Context(), "p1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := api.UnarchivePuppet(t.Context(), "p1"); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(f.archived, ",") != "archive p1,unarchive p1" || strings.Join(f.auth, ",") != "Bearer sock_mk_dev_secret,Bearer sock_mk_dev_secret" {
+		t.Fatalf("archived %v as %v", f.archived, f.auth)
+	}
+	if err := NewRename(cfg, "test")(t.Context(), "sock_pt_d_s", "s on mac"); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(f.renames, ",") != "Bearer sock_pt_d_s s on mac" {
+		t.Fatalf("renames %v", f.renames)
 	}
 }
