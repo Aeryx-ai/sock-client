@@ -126,7 +126,7 @@ func (p *SessionPuppets) SetName(ctx context.Context, s Session, name string) er
 	if tok == "" || p.Rename == nil {
 		return nil
 	}
-	_, id, old := p.meta(s)
+	id, old := p.meta(s)
 	full := puppetName(name, p.Host)
 	if full == old {
 		return nil
@@ -141,15 +141,15 @@ func (p *SessionPuppets) SetName(ctx context.Context, s Session, name string) er
 // Unarchive clears it. Both are idempotent at the hub; a session without a
 // puppet is left alone.
 func (p *SessionPuppets) Archive(ctx context.Context, s Session) error {
-	if _, id, _ := p.meta(s); id != "" {
+	if id, _ := p.meta(s); id != "" {
 		return p.API.ArchivePuppet(ctx, id)
 	}
 	return nil
 }
 
-// Unarchive: see Archive.
+// Unarchive clears what Archive set: the session runs again.
 func (p *SessionPuppets) Unarchive(ctx context.Context, s Session) error {
-	if _, id, _ := p.meta(s); id != "" {
+	if id, _ := p.meta(s); id != "" {
 		return p.API.UnarchivePuppet(ctx, id)
 	}
 	return nil
@@ -172,14 +172,17 @@ func (p *SessionPuppets) Sessions() []Session {
 	return out
 }
 
-// meta is an entry's session, puppet id and name: "<platform>:<id>", the id
-// and the name, one per line.
-func (p *SessionPuppets) meta(s Session) (Session, string, string) {
+// meta is the session's puppet id and name, "" without an entry.
+func (p *SessionPuppets) meta(s Session) (id, name string) {
 	if s.valid() != nil {
-		return Session{}, "", ""
+		return "", ""
 	}
-	return p.metaOf(s.key())
+	_, id, name = p.metaOf(s.key())
+	return id, name
 }
+
+// metaOf reads an entry: "<platform>:<id>", the puppet id and the name, one per
+// line.
 
 func (p *SessionPuppets) metaOf(key string) (Session, string, string) {
 	b, err := os.ReadFile(filepath.Join(p.cache().Dir, key+".meta"))
