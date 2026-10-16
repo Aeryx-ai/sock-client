@@ -183,7 +183,6 @@ func (p *SessionPuppets) meta(s Session) (id, name string) {
 
 // metaOf reads an entry: "<platform>:<id>", the puppet id and the name, one per
 // line.
-
 func (p *SessionPuppets) metaOf(key string) (Session, string, string) {
 	b, err := os.ReadFile(filepath.Join(p.cache().Dir, key+".meta"))
 	if err != nil {
