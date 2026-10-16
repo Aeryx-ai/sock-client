@@ -2,12 +2,17 @@ package client
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
 	"testing"
+
+	"connectrpc.com/connect"
+
+	sockv1 "github.com/guygrigsby/sock-contract/gen/go/sock/v1"
 )
 
 func newSessions(t *testing.T, f *fakePuppets) (*SessionPuppets, *[]string) {
@@ -146,5 +151,42 @@ func TestParseSession(t *testing.T) {
 	p, _ := newSessions(t, f)
 	if _, err := p.Ensure(t.Context(), Session{Platform: Codex, ID: "../x"}, "n"); err == nil || len(f.creates) != 0 {
 		t.Fatal("a session id that is not one was used")
+	}
+}
+
+// A cached token the hub no longer takes (evicted by the token limit) gets a
+// new token for the same puppet; a puppet the owner erased gets a new puppet.
+func TestSessionEnsureReplacesADeadToken(t *testing.T) {
+	f := newFake()
+	p, _ := newSessions(t, f)
+	first, err := p.Ensure(t.Context(), codexS1, "s")
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := f.firstID()
+	p.Check = func(_ context.Context, tok string) error {
+		if tok == first {
+			return withReason(connect.NewError(connect.CodeUnauthenticated, errors.New("evicted")), sockv1.ErrorReason_ERROR_REASON_TOKEN_INVALID)
+		}
+		return nil
+	}
+	second, err := p.Ensure(t.Context(), codexS1, "s")
+	if err != nil || second == first || !slices.Equal(f.mints, []string{id}) || len(f.creates) != 1 {
+		t.Fatalf("%q %v: mints %v creates %v", second, err, f.mints, f.creates)
+	}
+	if p.Cached(codexS1) != second {
+		t.Fatal("the new token was not cached")
+	}
+
+	// the owner erased the puppet: minting for it fails, so a new one is made
+	f.mu.Lock()
+	delete(f.puppets, id)
+	f.failMint = withReason(connect.NewError(connect.CodeNotFound, errors.New("gone")), sockv1.ErrorReason_ERROR_REASON_NOT_FOUND)
+	f.mu.Unlock()
+	p.Check = func(context.Context, string) error {
+		return withReason(connect.NewError(connect.CodeUnauthenticated, errors.New("gone")), sockv1.ErrorReason_ERROR_REASON_TOKEN_INVALID)
+	}
+	if _, err := p.Ensure(t.Context(), codexS1, "s"); err != nil || len(f.creates) != 2 {
+		t.Fatalf("%v: creates %v", err, f.creates)
 	}
 }

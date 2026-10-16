@@ -69,7 +69,12 @@ type SessionPuppets struct {
 	// Rename sets a puppet's display name with its own token
 	// (UpdateDisplayName, self).
 	Rename func(ctx context.Context, token, name string) error
-	Log    func(format string, args ...any)
+	// Check, when set, is asked about a cached token before Ensure returns it
+	// (NewTokenCheck). TOKEN_INVALID (evicted by the token limit, revoked)
+	// gets the same puppet a new token; a puppet that is gone gets a new
+	// puppet. Any other error keeps the token.
+	Check func(ctx context.Context, token string) error
+	Log   func(format string, args ...any)
 }
 
 func (p *SessionPuppets) cache() *Projects {
@@ -90,7 +95,20 @@ func (p *SessionPuppets) Ensure(ctx context.Context, s Session, name string) (st
 	}
 	defer unlock()
 	if tok := c.cached(s.key()); tok != "" {
-		return tok, nil
+		if p.Check == nil || Reason(p.Check(ctx, tok)) != sockv1.ErrorReason_ERROR_REASON_TOKEN_INVALID {
+			return tok, nil
+		}
+		id, old := p.meta(s)
+		if fresh, err := p.API.MintPuppetToken(ctx, id, tokenLabel); err == nil && TokenKind(fresh) == KindPuppet {
+			if err := p.store(s, id, old, fresh); err != nil {
+				return "", err
+			}
+			p.logf("puppet %q has a new token", old)
+			return fresh, nil
+		} else if Reason(err) != sockv1.ErrorReason_ERROR_REASON_NOT_FOUND {
+			return "", fmt.Errorf("renew this session's puppet token: %w", Describe(err))
+		}
+		p.logf("puppet %q is gone; making another", old)
 	}
 	full := puppetName(name, p.Host)
 	id, tok, err := p.API.CreatePuppet(ctx, full, tokenLabel)

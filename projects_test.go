@@ -33,7 +33,7 @@ type fakePuppets struct {
 	archives []string // "archive <id>" or "unarchive <id>", in order
 	// failErase, when set, answers ErasePuppet with it; failList ListPuppets;
 	// failCreate CreatePuppet
-	failErase, failList, failCreate error
+	failErase, failList, failCreate, failMint error
 	// takenBy: names that exist and are not ours
 	taken map[string]bool
 }
@@ -80,6 +80,9 @@ func (f *fakePuppets) MintPuppetToken(_ context.Context, id, _ string) (string, 
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.mints = append(f.mints, id)
+	if f.failMint != nil {
+		return "", f.failMint
+	}
 	return "sock_pt_" + id + "_reminted", nil
 }
 
