@@ -71,11 +71,13 @@ func callback(t *testing.T, port int, host string, q url.Values) *http.Response 
 	return res
 }
 
-func get(t *testing.T, port int, path string) *http.Response {
+// getDone loads the listener's /done page, as the browser does after the
+// callback.
+func getDone(t *testing.T, port int) *http.Response {
 	t.Helper()
-	res, err := noRedirect.Get(fmt.Sprintf("http://127.0.0.1:%d%s", port, path))
+	res, err := noRedirect.Get(fmt.Sprintf("http://127.0.0.1:%d/done", port))
 	if err != nil {
-		t.Errorf("get %s: %v", path, err)
+		t.Errorf("get /done: %v", err)
 		return nil
 	}
 	_, _ = io.Copy(io.Discard, res.Body)
@@ -106,7 +108,7 @@ func TestHappyPath(t *testing.T) {
 	res, err := run(t, Options{Show: func(raw string) error {
 		s = parseShown(t, raw)
 		cb = callback(t, s.port, host(s), good(s))
-		done = get(t, s.port, "/done")
+		done = getDone(t, s.port)
 		return nil
 	}})
 	if err != nil {
@@ -132,6 +134,24 @@ func TestHappyPath(t *testing.T) {
 	}
 	if done.StatusCode != http.StatusOK {
 		t.Fatalf("/done answered %d", done.StatusCode)
+	}
+}
+
+func TestClaimDerivesNonceHash(t *testing.T) {
+	var s shown
+	claim := func(raw string) string { return "sock-operator-cli-signin api.example " + raw }
+	res, err := run(t, Options{Claim: claim, Show: func(raw string) error {
+		s = parseShown(t, raw)
+		callback(t, s.port, host(s), good(s))
+		getDone(t, s.port)
+		return nil
+	}})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	sum := sha256.Sum256([]byte(claim(res.Nonce)))
+	if hex.EncodeToString(sum[:]) != s.nonce || len(res.Nonce) != 43 {
+		t.Fatalf("nonce %q with claim does not hash to %q", res.Nonce, s.nonce)
 	}
 }
 
@@ -204,7 +224,7 @@ func TestSecondCallbackRefused(t *testing.T) {
 		q := good(s)
 		q.Set("code", "second")
 		second = callback(t, s.port, host(s), q)
-		get(t, s.port, "/done")
+		getDone(t, s.port)
 		return nil
 	}})
 	if err != nil {
@@ -221,7 +241,7 @@ func TestListenerClosesAfterDone(t *testing.T) {
 		s := parseShown(t, raw)
 		port = s.port
 		callback(t, s.port, host(s), good(s))
-		get(t, s.port, "/done")
+		getDone(t, s.port)
 		return nil
 	}})
 	if err != nil {

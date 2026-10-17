@@ -47,13 +47,17 @@ type Options struct {
 	// Received, when set, is called once when the callback is accepted, so
 	// the person sees the sign-in arrived.
 	Received func()
+	// Claim, when set, derives the string whose SHA-256 goes to Apple from
+	// the raw nonce, binding the id_token to one flow (operator sign-in,
+	// sock-contract ADR 32). Nil sends the raw nonce's hash.
+	Claim func(raw string) string
 }
 
 // Result is what the sign-in RPC needs.
 type Result struct {
 	Code    string
 	IDToken string
-	// Nonce is the raw nonce whose SHA-256 went to Apple.
+	// Nonce is the raw nonce whose SHA-256 (or its Claim's) went to Apple.
 	Nonce string
 }
 
@@ -112,6 +116,7 @@ func Run(ctx context.Context, o Options) (Result, error) {
 		host:   "127.0.0.1:" + strconv.Itoa(port),
 		state:  strconv.Itoa(port) + "." + random(),
 		nonce:  random(),
+		claim:  o.Claim,
 		result: make(chan outcome, 1),
 		done:   make(chan struct{}),
 
@@ -173,6 +178,7 @@ type outcome struct {
 
 type listener struct {
 	host, state, nonce string
+	claim              func(string) string
 	result             chan outcome
 	done               chan struct{}
 	received           func()
@@ -187,7 +193,11 @@ func (l *listener) loginURL(hub string) (string, error) {
 	if err != nil || u.Host == "" {
 		return "", errors.New("server URL is not a valid absolute URL")
 	}
-	sum := sha256.Sum256([]byte(l.nonce))
+	claim := l.nonce
+	if l.claim != nil {
+		claim = l.claim(l.nonce)
+	}
+	sum := sha256.Sum256([]byte(claim))
 	u.Path = strings.TrimSuffix(u.Path, "/") + "/apple/cli-login"
 	u.RawPath = ""
 	u.RawQuery = url.Values{"state": {l.state}, "nonce": {hex.EncodeToString(sum[:])}}.Encode()
