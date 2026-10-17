@@ -149,3 +149,10 @@ func TestValidateRefusesAGateWithWhitespaceOrControlsWithoutEchoingIt(t *testing
 		t.Fatal(err)
 	}
 }
+
+// The default is the production hub's joinsock.com host (sock-contract ADR 31).
+func TestDefaultURLIsProductionHub(t *testing.T) {
+	if DefaultURL != "https://api.joinsock.com" {
+		t.Fatalf("DefaultURL = %q, want https://api.joinsock.com", DefaultURL)
+	}
+}

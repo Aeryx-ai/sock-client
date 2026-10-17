@@ -44,7 +44,7 @@ func FuzzTokenKind(f *testing.F) {
 }
 
 func FuzzValidate(f *testing.F) {
-	f.Add("https://api.sock.aeryx.ai", "sock_pt_abcdef123456", "")
+	f.Add("https://api.joinsock.com", "sock_pt_abcdef123456", "")
 	f.Add("http://127.0.0.1:8080", "sock_st_abcdef123456", "gate")
 	f.Add("http://localhost/x", "sock_mk_abcdef123456", "")
 	f.Add("http://evil.example/?k=supersecretquery", "sock_pt_abcdef123456", "")
@@ -248,7 +248,7 @@ func FuzzPuppetName(f *testing.F) {
 // FuzzLoadFileConfig fuzzes the parse; the file is always 0600, except a copy
 // at 0644 that must be refused when it holds a secret, without echoing it.
 func FuzzLoadFileConfig(f *testing.F) {
-	f.Add(`url = "https://api.sock.aeryx.ai"`)
+	f.Add(`url = "https://api.joinsock.com"`)
 	f.Add("token = \"sock_st_abcdef\"\npuppet_token = \"sock_pt_x\"\nmachine_key = \"sock_mk_y\"\naccess_gate = \"g\"\n")
 	f.Add("token = sock_st_unquotedsecret\n")
 	f.Add("[table]\nkey = 1\n")
