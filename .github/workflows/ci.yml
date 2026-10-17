@@ -27,7 +27,7 @@ jobs:
           echo "contract=$(cat client/.contract-ref)" >> "$GITHUB_OUTPUT"
       - uses: actions/checkout@v4
         with:
-          repository: guygrigsby/sock-contract
+          repository: Aeryx-ai/sock-contract
           ref: ${{ steps.pins.outputs.contract }}
           path: contract
           ssh-key: ${{ secrets.CONTRACT_DEPLOY_KEY }}
