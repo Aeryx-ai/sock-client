@@ -13,7 +13,7 @@ import (
 )
 
 // DefaultURL is the public sock hub.
-const DefaultURL = "https://api.sock.aeryx.ai"
+const DefaultURL = "https://api.joinsock.com"
 
 // Config is what every client needs to reach the server.
 type Config struct {
