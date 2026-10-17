@@ -11,7 +11,7 @@ import (
 	"regexp"
 	"strings"
 
-	sockv1 "github.com/guygrigsby/sock-contract/gen/go/sock/v1"
+	sockv1 "github.com/aeryx-ai/sock-contract/gen/go/sock/v1"
 )
 
 // Platform is the agent platform a session runs on.

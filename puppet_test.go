@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/guygrigsby/sock-contract/gen/go/sock/v1/sockv1connect"
+	"github.com/aeryx-ai/sock-contract/gen/go/sock/v1/sockv1connect"
 )
 
 // puppetEnv is a getenv over vars with a private state and home directory,

@@ -2,11 +2,11 @@ module github.com/guygrigsby/sock-client
 
 go 1.26.9
 
-replace github.com/guygrigsby/sock-contract => ../contract
+replace github.com/aeryx-ai/sock-contract => ../contract
 
 require (
 	connectrpc.com/connect v1.21.0
-	github.com/guygrigsby/sock-contract v0.5.0
+	github.com/aeryx-ai/sock-contract v0.5.0
 )
 
 require (
