@@ -93,39 +93,75 @@ var appleErrors = map[string]bool{
 // Run binds the listener, shows the login URL, and waits for the first
 // callback with the right Host and state.
 func Run(ctx context.Context, o Options) (Result, error) {
-	if o.Port != 0 && (o.Port < 1024 || o.Port > 65535) {
-		return Result{}, fmt.Errorf("--port must be 1024 to 65535, got %d", o.Port)
+	nonce := random()
+	q, err := wait(ctx, flow{port: o.Port, timeout: o.Timeout, show: o.Show, received: o.Received},
+		"/callback", appleCallback, func(state string) (string, error) {
+			return appleLoginURL(o.Hub, state, nonce, o.Claim)
+		})
+	if err != nil {
+		return Result{}, err
 	}
-	timeout := o.Timeout
+	return Result{Code: q.Get("code"), IDToken: q.Get("id_token"), Nonce: nonce}, nil
+}
+
+// appleCallback takes Apple's relayed code and id_token, or its error.
+func appleCallback(q url.Values) (bool, error) {
+	if q.Has("error") {
+		code := q.Get("error")
+		if !appleErrors[code] {
+			code = ""
+		}
+		return true, &AppleError{Code: code}
+	}
+	return q.Get("code") != "" && q.Get("id_token") != "", nil
+}
+
+// flow is what every browser handoff takes from its caller.
+type flow struct {
+	port     int
+	timeout  time.Duration
+	show     func(string) error
+	received func()
+}
+
+// wait binds the listener, builds the URL to show from the state, shows it,
+// and waits for the first request to path that carries the state and that
+// accept takes. accept reports whether the query is well formed (else 400 and
+// the wait goes on) and the flow's error, if the browser reported one.
+func wait(ctx context.Context, f flow, path string, accept func(url.Values) (bool, error),
+	build func(state string) (string, error)) (url.Values, error) {
+	if f.port != 0 && (f.port < 1024 || f.port > 65535) {
+		return nil, fmt.Errorf("--port must be 1024 to 65535, got %d", f.port)
+	}
+	timeout := f.timeout
 	if timeout <= 0 {
 		timeout = DefaultTimeout
 	}
-	ln, err := listen(ctx, net.JoinHostPort("127.0.0.1", strconv.Itoa(o.Port)))
-	if err != nil && o.Port != 0 {
-		return Result{}, fmt.Errorf("port %d is in use or cannot be bound on 127.0.0.1; pick another --port (%w)", o.Port, err)
+	ln, err := listen(ctx, net.JoinHostPort("127.0.0.1", strconv.Itoa(f.port)))
+	if err != nil && f.port != 0 {
+		return nil, fmt.Errorf("port %d is in use or cannot be bound on 127.0.0.1; pick another --port (%w)", f.port, err)
 	}
 	if err != nil {
-		return Result{}, fmt.Errorf("listen on 127.0.0.1: %w", err)
+		return nil, fmt.Errorf("listen on 127.0.0.1: %w", err)
 	}
 	port := ln.Addr().(*net.TCPAddr).Port
 	if port < 1024 {
 		_ = ln.Close()
-		return Result{}, fmt.Errorf("listener got port %d; pass --port 1024 to 65535", port)
+		return nil, fmt.Errorf("listener got port %d; pass --port 1024 to 65535", port)
 	}
 	l := &listener{
-		host:   "127.0.0.1:" + strconv.Itoa(port),
-		state:  strconv.Itoa(port) + "." + random(),
-		nonce:  random(),
-		claim:  o.Claim,
-		result: make(chan outcome, 1),
-		done:   make(chan struct{}),
-
-		received: o.Received,
+		host:     "127.0.0.1:" + strconv.Itoa(port),
+		state:    strconv.Itoa(port) + "." + random(),
+		path:     path,
+		accept:   accept,
+		result:   make(chan outcome, 1),
+		done:     make(chan struct{}),
+		received: f.received,
 	}
-	loginURL, err := l.loginURL(o.Hub)
+	shown, err := build(l.state)
 	if err != nil {
 		_ = ln.Close()
-		return Result{}, err
+		return nil, err
 	}
 	srv := &http.Server{Handler: l.routes(), ReadHeaderTimeout: 10 * time.Second}
 	served := make(chan error, 1)
@@ -137,8 +173,8 @@ func Run(ctx context.Context, o Options) (Result, error) {
 		_ = srv.Close()
 	}()
 
-	if err := o.Show(loginURL); err != nil {
-		return Result{}, err
+	if err := f.show(shown); err != nil {
+		return nil, err
 	}
 	timer := time.NewTimer(timeout)
 	defer timer.Stop()
@@ -146,22 +182,19 @@ func Run(ctx context.Context, o Options) (Result, error) {
 	select {
 	case out = <-l.result:
 	case err := <-served:
-		return Result{}, fmt.Errorf("listener stopped: %w", err)
+		return nil, fmt.Errorf("listener stopped: %w", err)
 	case <-timer.C:
-		return Result{}, fmt.Errorf("%w within %s; run the command again", ErrTimeout, timeout)
+		return nil, fmt.Errorf("%w within %s; run the command again", ErrTimeout, timeout)
 	case <-ctx.Done():
-		return Result{}, ctx.Err()
+		return nil, ctx.Err()
 	}
-	// Let the browser load /done so the code leaves its address bar.
+	// Let the browser load /done so the result leaves its address bar.
 	select {
 	case <-l.done:
 	case <-time.After(doneGrace):
 	case <-ctx.Done():
 	}
-	if out.err != nil {
-		return Result{}, out.err
-	}
-	return Result{Code: out.code, IDToken: out.idToken, Nonce: l.nonce}, nil
+	return out.q, out.err
 }
 
 // random is 32 random bytes as 43 base64url characters.
@@ -172,37 +205,43 @@ func random() string {
 }
 
 type outcome struct {
-	code, idToken string
-	err           error
+	q   url.Values
+	err error
 }
 
 type listener struct {
-	host, state, nonce string
-	claim              func(string) string
-	result             chan outcome
-	done               chan struct{}
-	received           func()
+	host, state, path string
+	accept            func(url.Values) (bool, error)
+	result            chan outcome
+	done              chan struct{}
+	received          func()
 
 	mu       sync.Mutex
 	accepted bool
 	doneOnce sync.Once
 }
 
-func (l *listener) loginURL(hub string) (string, error) {
+// hubURL is path on the hub with query q, keeping any path prefix the hub
+// URL has and dropping its query and fragment.
+func hubURL(hub, path string, q url.Values) (string, error) {
 	u, err := url.Parse(hub)
 	if err != nil || u.Host == "" {
 		return "", errors.New("server URL is not a valid absolute URL")
 	}
-	claim := l.nonce
-	if l.claim != nil {
-		claim = l.claim(l.nonce)
-	}
-	sum := sha256.Sum256([]byte(claim))
-	u.Path = strings.TrimSuffix(u.Path, "/") + "/apple/cli-login"
+	u.Path = strings.TrimSuffix(u.Path, "/") + path
 	u.RawPath = ""
-	u.RawQuery = url.Values{"state": {l.state}, "nonce": {hex.EncodeToString(sum[:])}}.Encode()
+	u.RawQuery = q.Encode()
 	u.Fragment = ""
 	return u.String(), nil
+}
+
+func appleLoginURL(hub, state, nonce string, claim func(string) string) (string, error) {
+	c := nonce
+	if claim != nil {
+		c = claim(nonce)
+	}
+	sum := sha256.Sum256([]byte(c))
+	return hubURL(hub, "/apple/cli-login", url.Values{"state": {state}, "nonce": {hex.EncodeToString(sum[:])}})
 }
 
 const donePage = `<!doctype html>
@@ -214,7 +253,7 @@ const donePage = `<!doctype html>
 
 func (l *listener) routes() http.Handler {
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /callback", l.callback)
+	mux.HandleFunc("GET "+l.path, l.callback)
 	mux.HandleFunc("GET /done", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.Header().Set("Content-Security-Policy", "default-src 'none'")
@@ -232,8 +271,8 @@ func (l *listener) routes() http.Handler {
 	})
 }
 
-// callback accepts exactly one request carrying this run's state. Anything
-// else gets 400 and leaves the wait running.
+// callback accepts exactly one request carrying this run's state that the
+// run's accept takes. Anything else gets 400 and leaves the wait running.
 func (l *listener) callback(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	states := q["state"]
@@ -241,19 +280,10 @@ func (l *listener) callback(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "bad request", http.StatusBadRequest)
 		return
 	}
-	var out outcome
-	if q.Has("error") {
-		code := q.Get("error")
-		if !appleErrors[code] {
-			code = ""
-		}
-		out.err = &AppleError{Code: code}
-	} else {
-		out.code, out.idToken = q.Get("code"), q.Get("id_token")
-		if out.code == "" || out.idToken == "" {
-			http.Error(w, "bad request", http.StatusBadRequest)
-			return
-		}
+	ok, flowErr := l.accept(q)
+	if !ok {
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
 	}
 	l.mu.Lock()
 	first := !l.accepted
@@ -266,6 +296,9 @@ func (l *listener) callback(w http.ResponseWriter, r *http.Request) {
 	if l.received != nil {
 		l.received()
 	}
-	l.result <- out
+	if flowErr != nil {
+		q = nil
+	}
+	l.result <- outcome{q: q, err: flowErr}
 	http.Redirect(w, r, "/done", http.StatusSeeOther)
 }

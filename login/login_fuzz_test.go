@@ -27,7 +27,7 @@ func FuzzCallback(f *testing.F) {
 	f.Add("%zz&state=" + fuzzState)
 	f.Add("")
 	f.Fuzz(func(t *testing.T, rawQuery string) {
-		l := &listener{host: "127.0.0.1:54321", state: fuzzState, result: make(chan outcome, 1), done: make(chan struct{})}
+		l := &listener{host: "127.0.0.1:54321", state: fuzzState, path: "/callback", accept: appleCallback, result: make(chan outcome, 1), done: make(chan struct{})}
 		r := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:54321/callback", nil)
 		r.URL.RawQuery = rawQuery
 		w := httptest.NewRecorder()
@@ -65,7 +65,7 @@ func FuzzCallback(f *testing.F) {
 			}
 			return
 		}
-		if got.err != nil || got.code != q.Get("code") || got.idToken != q.Get("id_token") {
+		if got.err != nil || got.q.Get("code") != q.Get("code") || got.q.Get("id_token") != q.Get("id_token") {
 			t.Fatalf("query %q: outcome %+v", rawQuery, *got)
 		}
 	})
@@ -78,8 +78,7 @@ func FuzzLoginURL(f *testing.F) {
 		f.Add(s)
 	}
 	f.Fuzz(func(t *testing.T, hub string) {
-		l := &listener{state: fuzzState, nonce: "nonce-value"}
-		got, err := l.loginURL(hub)
+		got, err := appleLoginURL(hub, fuzzState, "nonce-value", nil)
 		h, herr := url.Parse(hub)
 		if herr != nil || h.Host == "" {
 			if err == nil {
