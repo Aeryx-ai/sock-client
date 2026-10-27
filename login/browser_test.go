@@ -249,3 +249,19 @@ func TestPasskeyChallengeRequired(t *testing.T) {
 		t.Fatal("31-byte challenge accepted")
 	}
 }
+
+func TestPasskeyCreationChecked(t *testing.T) {
+	for name, c := range map[string]*PasskeyCreation{
+		"short handle": {UserHandle: uh[:15], UserName: "@me"},
+		"no name":      {UserHandle: uh},
+		"11 excludes":  {UserHandle: uh, UserName: "@me", Exclude: make([][]byte, 11)},
+	} {
+		_, err := runPasskey(t, PasskeyOptions{Challenge: challenge, Create: c, Show: func(string) error {
+			t.Fatalf("%s: shown", name)
+			return nil
+		}})
+		if err == nil {
+			t.Fatalf("%s accepted", name)
+		}
+	}
+}

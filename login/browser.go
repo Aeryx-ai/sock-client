@@ -112,6 +112,9 @@ func Passkey(ctx context.Context, o PasskeyOptions) (PasskeyResult, error) {
 	if len(o.Challenge) != 32 {
 		return PasskeyResult{}, errors.New("passkey challenge must be 32 bytes")
 	}
+	if c := o.Create; c != nil && (len(c.UserHandle) != 16 || c.UserName == "" || len(c.Exclude) > 10) {
+		return PasskeyResult{}, errors.New("passkey creation needs a 16-byte user handle, a user name and at most 10 excluded credentials")
+	}
 	page := o.Page
 	if page == "" {
 		page = DefaultPasskeyPage
