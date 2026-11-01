@@ -54,8 +54,8 @@ func (s Session) key() string {
 	return hex.EncodeToString(sum[:])[:32]
 }
 
-// SessionPuppets keeps one puppet per agent session for a machine key
-// (sock-contract ADR 27): minted the first time the session sends, cached
+// SessionPuppets keeps one puppet per agent session for a machine key:
+// minted the first time the session sends, cached
 // privately, renamed with the session and archived while it is not running.
 // Never erased. sock-mcp and the CLI share it, so the hooks and the server
 // agree on a session's puppet.

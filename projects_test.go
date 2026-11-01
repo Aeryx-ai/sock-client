@@ -926,7 +926,7 @@ func TestInRepository(t *testing.T) {
 	}
 }
 
-// The machine key's owner at the 100-puppet cap (ADR 10) is told what to do
+// The machine key's owner at the 100-puppet cap is told what to do
 // about it, and nothing is cached for the project.
 func TestEnsureAtThePuppetLimitSaysWhatToEraseAndCachesNothing(t *testing.T) {
 	f := newFake()
@@ -1126,7 +1126,7 @@ func (f *identityFake) UpdateDisplayName(_ context.Context, r *connect.Request[s
 	return connect.NewResponse(&sockv1.UpdateDisplayNameResponse{}), nil
 }
 
-// ADR 27: the machine key archives; the puppet renames itself with its own
+// The machine key archives; the puppet renames itself with its own
 // token.
 func TestArchiveWithTheKeyRenameWithThePuppet(t *testing.T) {
 	f := &identityFake{}

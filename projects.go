@@ -22,7 +22,7 @@ import (
 	sockv1 "github.com/aeryx-ai/sock-contract/gen/go/sock/v1"
 )
 
-// TokenKindName is what a bearer token is by its prefix (ADR 10).
+// TokenKindName is what a bearer token is by its prefix.
 type TokenKindName int
 
 // The kinds of token: a human session, a puppet's, a machine key's.
@@ -51,7 +51,7 @@ func TokenKind(token string) TokenKindName {
 // name it was created with.
 type PuppetInfo struct{ ID, Name string }
 
-// PuppetAPI is what a machine key may call (ADR 10, ADR 27): the RPCs of its
+// PuppetAPI is what a machine key may call: the RPCs of its
 // caller class, reduced to what project and session puppets need.
 type PuppetAPI interface {
 	CreatePuppet(ctx context.Context, name, tokenLabel string) (id, token string, err error)
@@ -153,7 +153,7 @@ func (a *connectPuppets) ErasePuppet(ctx context.Context, id string) error {
 	return err
 }
 
-// Projects keeps one puppet per project for a machine key (ADR 10): minted on
+// Projects keeps one puppet per project for a machine key: minted on
 // first use, cached privately, erased when the repository is gone. sock-mcp and
 // the CLI command the hook calls share it, so the hook and the server always
 // agree on which puppet a project is.

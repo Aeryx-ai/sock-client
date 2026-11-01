@@ -116,8 +116,8 @@ func TestRetrierZeroValueIsSafe(t *testing.T) {
 }
 
 // A Retry-After longer than Max cannot be honored inside the budget: retrying
-// sooner is what the header asks callers not to do (ADR 20's owner-direct
-// limits answer in minutes), so Do gives up at once and the caller sees the
+// sooner is what the header asks callers not to do (owner-direct rate limits
+// answer in minutes), so Do gives up at once and the caller sees the
 // wait.
 func TestRetryAfterBeyondMaxGivesUp(t *testing.T) {
 	now := time.Date(2026, 10, 10, 12, 0, 0, 0, time.UTC)

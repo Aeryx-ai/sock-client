@@ -1,8 +1,7 @@
 // Package login runs the browser half of Sign in with Apple for a native sock
-// client (sock login and sock register in the CLI, the desktop app)
-// (sock-contract ADR 6): a one-shot loopback listener receives the Apple
-// code and id_token the hub relays, bound to a state and a raw nonce this
-// process alone holds.
+// client (sock login and sock register in the CLI, the desktop app):
+// a one-shot loopback listener receives the Apple code and id_token the hub
+// relays, bound to a state and a raw nonce this process alone holds.
 package login
 
 import (
@@ -48,8 +47,8 @@ type Options struct {
 	// the person sees the sign-in arrived.
 	Received func()
 	// Claim, when set, derives the string whose SHA-256 goes to Apple from
-	// the raw nonce, binding the id_token to one flow (operator sign-in,
-	// sock-contract ADR 32). Nil sends the raw nonce's hash.
+	// the raw nonce, binding the id_token to one flow (operator sign-in).
+	// Nil sends the raw nonce's hash.
 	Claim func(raw string) string
 }
 

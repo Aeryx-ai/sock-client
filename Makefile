@@ -1,7 +1,7 @@
 .DEFAULT_GOAL := build
 .PHONY: build test install redeploy check lint fmt vet cross check-head ci-pins pins
 
-# Pins (ADR 1): every go target builds against the sock-contract tag in
+# Pins: every go target builds against the sock-contract tag in
 # .contract-ref, the tag CI checks out, not whatever the sibling checkout
 # has at HEAD. make pins clones the tag once under PIN_CACHE, from the
 # sibling checkout (fetching the tag when it lacks it), then reuses it

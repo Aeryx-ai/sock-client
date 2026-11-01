@@ -117,7 +117,7 @@ func LoadPuppetConfig(o PuppetOptions) (Config, error) {
 }
 
 // ProjectPuppet turns a machine key into the token of the project's puppet
-// (ADR 10); any other credential is returned as it is. The project is
+// minted from that key; any other credential passes through. The project is
 // CLAUDE_PROJECT_DIR, else WorkDir when it names one. When it does not
 // (inside PLUGIN_ROOT, or outside any git repository) a key from the config
 // file falls back to the file's puppet_token, and a key from SOCK_TOKEN
