@@ -21,9 +21,10 @@ const AccessGateHeader = "Sock-Access-Gate"
 
 // Clients are the sock services a caller of the API uses.
 type Clients struct {
-	Identity   sockv1connect.IdentityServiceClient
-	Messaging  sockv1connect.MessagingServiceClient
-	Moderation sockv1connect.ModerationServiceClient
+	Identity        sockv1connect.IdentityServiceClient
+	Messaging       sockv1connect.MessagingServiceClient
+	Moderation      sockv1connect.ModerationServiceClient
+	HistoryTransfer sockv1connect.HistoryTransferServiceClient
 }
 
 // Option adjusts the clients New builds.
@@ -75,9 +76,10 @@ func New(cfg Config, userAgent string, opts ...Option) Clients {
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 	}
 	return Clients{
-		Identity:   sockv1connect.NewIdentityServiceClient(hc, cfg.URL, o.rpc...),
-		Messaging:  sockv1connect.NewMessagingServiceClient(hc, cfg.URL, o.rpc...),
-		Moderation: sockv1connect.NewModerationServiceClient(hc, cfg.URL, o.rpc...),
+		Identity:        sockv1connect.NewIdentityServiceClient(hc, cfg.URL, o.rpc...),
+		Messaging:       sockv1connect.NewMessagingServiceClient(hc, cfg.URL, o.rpc...),
+		Moderation:      sockv1connect.NewModerationServiceClient(hc, cfg.URL, o.rpc...),
+		HistoryTransfer: sockv1connect.NewHistoryTransferServiceClient(hc, cfg.URL, o.rpc...),
 	}
 }
 

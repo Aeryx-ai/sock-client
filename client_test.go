@@ -156,3 +156,29 @@ func TestDefaultURLIsProductionHub(t *testing.T) {
 		t.Fatalf("DefaultURL = %q, want https://api.joinsock.com", DefaultURL)
 	}
 }
+
+type historyTransfer struct {
+	sockv1connect.UnimplementedHistoryTransferServiceHandler
+	auth atomic.Value
+}
+
+func (h *historyTransfer) CloseHistoryTransfer(_ context.Context, r *connect.Request[sockv1.CloseHistoryTransferRequest]) (*connect.Response[sockv1.CloseHistoryTransferResponse], error) {
+	h.auth.Store(r.Header().Get("Authorization"))
+	return connect.NewResponse(&sockv1.CloseHistoryTransferResponse{}), nil
+}
+
+func TestNewBuildsHistoryTransfer(t *testing.T) {
+	h := &historyTransfer{}
+	mux := http.NewServeMux()
+	p, hh := sockv1connect.NewHistoryTransferServiceHandler(h)
+	mux.Handle(p, hh)
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	c := New(Config{URL: srv.URL, Token: token}, "t")
+	if _, err := c.HistoryTransfer.CloseHistoryTransfer(t.Context(), connect.NewRequest(&sockv1.CloseHistoryTransferRequest{TransferSecret: make([]byte, 32)})); err != nil {
+		t.Fatalf("CloseHistoryTransfer: %v", err)
+	}
+	if h.auth.Load() != "Bearer "+token {
+		t.Fatalf("auth %v", h.auth.Load())
+	}
+}
