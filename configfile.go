@@ -22,6 +22,9 @@ type FileConfig struct {
 	// (sock machine-key use writes it).
 	MachineKey string `toml:"machine_key"`
 	AccessGate string `toml:"access_gate"`
+	// MessageOwner is whether this machine's puppets may message the owner
+	// without the owner writing first. Nil means unset: see MessageOwner.
+	MessageOwner *bool `toml:"message_owner"`
 }
 
 // DefaultConfigPath is $XDG_CONFIG_HOME/sock/config.toml, else
@@ -70,7 +73,7 @@ func LoadFileConfig(path string) (FileConfig, error) {
 
 // fileKeys are the keys a sock config file holds, the only ones an error
 // may name: any other word on a line could be a pasted secret.
-var fileKeys = map[string]bool{"url": true, "token": true, "puppet_token": true, "machine_key": true, "access_gate": true}
+var fileKeys = map[string]bool{"url": true, "token": true, "puppet_token": true, "machine_key": true, "access_gate": true, "message_owner": true}
 
 // tomlWhere finds the line and last key the parser reports.
 var tomlWhere = regexp.MustCompile(`^toml: line (\d+)(?: \(last key "([^"]*)"\))?`)
