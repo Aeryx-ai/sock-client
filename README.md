@@ -114,7 +114,7 @@ token := res.Msg.GetSession().GetToken() // sock_st_...: store it mode 0600, nev
 
 ### Config file
 
-- `FileConfig`: the TOML keys `url`, `token` (the person's session, written by `sock login`), `puppet_token` (`sock puppets use`), `machine_key` (`sock machine-key use`), `access_gate` and `message_owner` (`sock settings --message-owner`; `MessageOwner` resolves it with the `SOCK_MCP_MESSAGE_OWNER` override, default on). All optional.
+- `FileConfig`: the TOML keys `url`, `token` (the person's session, written by `sock login`), `puppet_token` (`sock puppets use`), `machine_key` (`sock machine-key use`), `access_gate` and `message_owner` (`sock settings --message-owner`; `MessageOwner` resolves it with the `SOCK_MCP_MESSAGE_OWNER` override, where `1`, `true` or `on` is on and any other non-empty value is off; default on). All optional.
 - `DefaultConfigPath(getenv)`: `$XDG_CONFIG_HOME/sock/config.toml`, else `~/.config/sock/config.toml`.
 - `LoadFileConfig(path)`: an empty path or a missing file is an empty config. A file holding a secret that is readable by group or others is refused with a `chmod 600` hint.
 - `ParseError(path, err)`: a TOML error that names the line and key but never quotes the file, since the text the parser choked on could be a token.

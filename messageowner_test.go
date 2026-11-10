@@ -17,9 +17,14 @@ func TestMessageOwnerEnvThenFileThenDefault(t *testing.T) {
 		{"true", &off, true, MessageOwnerEnv},
 		{"0", &on, false, MessageOwnerEnv},
 		{"false", nil, false, MessageOwnerEnv},
-		// anything else is not a setting: the file decides
-		{"yes", &off, false, MessageOwnerFile},
-		{"TRUE", nil, true, MessageOwnerDefault},
+		{"on", &off, true, MessageOwnerEnv},
+		{"off", &on, false, MessageOwnerEnv},
+		// any other value set is not a setting: it fails closed, never to the
+		// file or the default (an operator who wrote "no" meant off)
+		{"no", &on, false, MessageOwnerEnv},
+		{"TRUE", nil, false, MessageOwnerEnv},
+		{" false", nil, false, MessageOwnerEnv},
+		{"${user_config.message_owner}", &on, false, MessageOwnerEnv},
 	}
 	for _, c := range cases {
 		getenv := func(k string) string {
